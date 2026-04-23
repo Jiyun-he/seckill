@@ -1,0 +1,9 @@
+#target
+.git
+.idea
+.vscode
+*.log
+Dockerfile*
+compose*
+HELP.md
+agent.md
