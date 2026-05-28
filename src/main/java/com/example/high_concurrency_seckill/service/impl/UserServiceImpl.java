@@ -36,8 +36,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         user.setUsername(username);
         user.setPassword(passwordEncoder.encode(password));
         this.save(user);
-        // 注册成功后直接生成token
-        return jwtUtil.generateToken(user.getId());
+        // 注册成功后生成token并存入Redis
+        String token = jwtUtil.generateToken(user.getId());
+        redisTemplate.opsForValue().set("token:" + user.getId(), token, jwtUtil.getExpiration(), TimeUnit.MILLISECONDS);
+        return token;
     }
 
     @Override

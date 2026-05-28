@@ -4,7 +4,7 @@ DROP TABLE IF EXISTS goods;
 DROP TABLE IF EXISTS `user`;
 
 CREATE TABLE goods (
-                       id BIGINT NOT NULL,
+                       id BIGINT NOT NULL AUTO_INCREMENT,
                        name VARCHAR(200) NOT NULL,
                        price DECIMAL(10,2) NOT NULL,
                        stock INT NOT NULL,
@@ -37,11 +37,11 @@ CREATE TABLE seckill_goods (
 );
 
 INSERT INTO seckill_goods (id, goods_id, seckill_price, seckill_stock, start_time, end_time) VALUES
-                                                                                                 (1, 1001, 99.99, 50, '2026-04-22 19:00:00', '2026-04-22 20:00:00'),
-                                                                                                 (2, 1002, 149.50, 29, '2026-04-22 19:00:00', '2026-04-22 20:00:00'),
-                                                                                                 (3, 1003, 59.90, 100, '2026-04-22 19:00:00', '2026-04-22 20:00:00'),
-                                                                                                 (4, 1004, 199.00, 20, '2026-04-22 19:00:00', '2026-04-22 20:00:00'),
-                                                                                                 (5, 1005, 79.99, 75, '2026-04-22 19:00:00', '2026-04-22 20:00:00');
+                                                                                                 (1, 1001, 99.99, 50, '2026-01-01 00:00:00', '2026-12-31 23:59:59'),
+                                                                                                 (2, 1002, 149.50, 29, '2026-01-01 00:00:00', '2026-12-31 23:59:59'),
+                                                                                                 (3, 1003, 59.90, 100, '2026-01-01 00:00:00', '2026-12-31 23:59:59'),
+                                                                                                 (4, 1004, 199.00, 20, '2026-01-01 00:00:00', '2026-12-31 23:59:59'),
+                                                                                                 (5, 1005, 79.99, 75, '2026-01-01 00:00:00', '2026-12-31 23:59:59');
 
 CREATE TABLE `user` (
                         id BIGINT NOT NULL AUTO_INCREMENT,
@@ -58,6 +58,7 @@ CREATE TABLE `order` (
                          order_no VARCHAR(32) NOT NULL,
                          user_id BIGINT NOT NULL,
                          goods_id BIGINT NOT NULL,
+                         seckill_goods_id BIGINT DEFAULT NULL,
                          goods_name VARCHAR(200) DEFAULT NULL,
                          goods_price DECIMAL(10,2) NOT NULL,
                          quantity INT NOT NULL,
@@ -66,5 +67,6 @@ CREATE TABLE `order` (
                          create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
                          PRIMARY KEY (id),
                          UNIQUE KEY uk_order_no (order_no),
+                         UNIQUE KEY uk_user_seckill (user_id, seckill_goods_id),
                          KEY idx_user_id (user_id)
 );

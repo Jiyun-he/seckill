@@ -34,11 +34,7 @@ public class OrderController {
         if (userId == null) {
             return Result.error("未登录");
         }
-        try {
-            OrderVO order = orderService.createOrder(userId, orderDTO.getGoodsId(), orderDTO.getQuantity());
-            return Result.success(order);
-        } catch (RuntimeException e) {
-            return Result.error(e.getMessage());
-        }
+        OrderVO order = orderService.createOrder(userId, orderDTO.getGoodsId(), orderDTO.getQuantity());
+        return Result.success(order);
     }
 }

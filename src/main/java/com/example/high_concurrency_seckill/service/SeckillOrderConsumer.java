@@ -1,27 +1,33 @@
 package com.example.high_concurrency_seckill.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.high_concurrency_seckill.entity.Goods;
 import com.example.high_concurrency_seckill.entity.Order;
 import com.example.high_concurrency_seckill.entity.SeckillGoods;
 import com.example.high_concurrency_seckill.mapper.OrderMapper;
 import com.example.high_concurrency_seckill.config.RabbitMQConfig;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Map;
 
+@Slf4j
 @Component
 public class SeckillOrderConsumer {
 
     @Autowired
     private OrderMapper orderMapper;
     @Autowired
-    private SeckillGoodsService seckillGoodsService; // 你需要创建这个Service
+    private SeckillGoodsService seckillGoodsService;
     @Autowired
-    private GoodsService goodsService; // 普通商品Service
+    private GoodsService goodsService;
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
 
     @RabbitListener(queues = RabbitMQConfig.SECKILL_QUEUE)
     @Transactional(rollbackFor = Exception.class)
@@ -30,36 +36,50 @@ public class SeckillOrderConsumer {
         Long seckillGoodsId = Long.valueOf(msg.get("seckillGoodsId").toString());
         String orderNo = msg.get("orderNo").toString();
 
-        // 幂等性检查：根据订单号查询是否已存在（避免重复消费）
-        Long count = orderMapper.selectCount(new LambdaUpdateWrapper<Order>().eq(Order::getOrderNo, orderNo));
+        // 幂等性检查
+        Long count = orderMapper.selectCount(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
         if (count > 0) {
-            return; // 已处理过
+            return;
         }
 
-        // 查询秒杀商品信息
         SeckillGoods seckillGoods = seckillGoodsService.getById(seckillGoodsId);
         if (seckillGoods == null) {
             throw new RuntimeException("秒杀商品不存在");
         }
-        // 查询普通商品详情（获取名称等快照）
         Goods goods = goodsService.getById(seckillGoods.getGoodsId());
+        if (goods == null) {
+            throw new RuntimeException("关联商品不存在");
+        }
 
-        // 创建订单
         Order order = new Order();
         order.setOrderNo(orderNo);
         order.setUserId(userId);
         order.setGoodsId(seckillGoods.getGoodsId());
+        order.setSeckillGoodsId(seckillGoodsId);
         order.setGoodsName(goods.getName());
         order.setGoodsPrice(seckillGoods.getSeckillPrice());
         order.setQuantity(1);
         order.setTotalAmount(seckillGoods.getSeckillPrice());
-        order.setStatus(0); // 0-待支付
+        order.setStatus(0);
         orderMapper.insert(order);
 
-        // 扣减数据库中的秒杀库存（最终一致性）
-        seckillGoodsService.update(new LambdaUpdateWrapper<SeckillGoods>()
+        boolean updated = seckillGoodsService.update(new LambdaUpdateWrapper<SeckillGoods>()
                 .eq(SeckillGoods::getId, seckillGoodsId)
                 .ge(SeckillGoods::getSeckillStock, 1)
                 .setSql("seckill_stock = seckill_stock - 1"));
+        if (!updated) {
+            throw new RuntimeException("库存不足");
+        }
+    }
+
+    @RabbitListener(queues = RabbitMQConfig.SECKILL_DLQ)
+    public void handleDeadLetter(Map<String, Object> msg) {
+        Long userId = Long.valueOf(msg.get("userId").toString());
+        Long seckillGoodsId = Long.valueOf(msg.get("seckillGoodsId").toString());
+        String orderNo = msg.get("orderNo").toString();
+
+        log.warn("订单 {} 进入死信队列，执行补偿", orderNo);
+        stringRedisTemplate.opsForValue().increment("seckill:stock:" + seckillGoodsId);
+        stringRedisTemplate.opsForSet().remove("seckill:ordered:" + seckillGoodsId, userId.toString());
     }
 }

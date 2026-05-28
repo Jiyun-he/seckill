@@ -19,6 +19,8 @@ public class Order {
     private Long userId;
     @Schema(description = "商品ID", example = "1001")
     private Long goodsId;
+    @Schema(description = "秒杀商品ID", example = "1")
+    private Long seckillGoodsId;
     @Schema(description = "商品名称（下单快照）", example = "示例商品")
     private String goodsName;
     @Schema(description = "商品单价（下单快照）", example = "199.00")

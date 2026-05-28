@@ -42,11 +42,7 @@ public class SeckillController {
         if (userId == null) {
             return Result.error("未登录");
         }
-        try {
-            String orderNo = seckillService.seckill(userId, seckillGoodsId);
-            return Result.success(orderNo);
-        } catch (RuntimeException e) {
-            return Result.error(e.getMessage());
-        }
+        String orderNo = seckillService.seckill(userId, seckillGoodsId);
+        return Result.success(orderNo);
     }
 }

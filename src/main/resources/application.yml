@@ -28,7 +28,7 @@ spring:
   redisson:
     config: |
       singleServerConfig:
-        address: "redis://redis:6379"
+        address: "redis://${REDIS_HOST:redis}:${REDIS_PORT:6379}"
         database: 0
 mybatis-plus:
   configuration:
