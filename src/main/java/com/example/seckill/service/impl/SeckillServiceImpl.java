@@ -1,7 +1,7 @@
 package com.example.seckill.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.example.seckill.config.RabbitMQConfig;
+import com.example.seckill.config.RabbitMqConfig;
 import com.example.seckill.converter.SeckillGoodsConverter;
 import com.example.seckill.entity.SeckillGoods;
 import com.example.seckill.mapper.SeckillGoodsMapper;
@@ -91,7 +91,10 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
         COMPENSATE_LUA = compensateScript;
     }
 
-    @PostConstruct  // 项目启动时自动预热
+    /**
+     * 项目启动时自动预热。
+     */
+    @PostConstruct
     @Override
     public void loadSeckillStockToRedis() {
         List<SeckillGoods> list = this.list();
@@ -208,7 +211,7 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
     }
 
     private void sendSeckillOrderMessage(Long userId, Long seckillGoodsId, Long orderNo) {
-        Map<String, Object> msg = new HashMap<>();
+        Map<String, Object> msg = new HashMap<>(16);
         msg.put("userId", userId);
         msg.put("seckillGoodsId", seckillGoodsId);
         msg.put("orderNo", orderNo);
@@ -225,8 +228,8 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
         });
 
         try {
-            rabbitTemplate.convertAndSend(RabbitMQConfig.SECKILL_EXCHANGE,
-                    RabbitMQConfig.SECKILL_ROUTING_KEY, msg, correlationData);
+            rabbitTemplate.convertAndSend(RabbitMqConfig.SECKILL_EXCHANGE,
+                    RabbitMqConfig.SECKILL_ROUTING_KEY, msg, correlationData);
         } catch (Exception e) {
             compensateRedis(stockKey, orderedKey, userIdStr);
             throw new RuntimeException("消息发送失败", e);
@@ -255,8 +258,8 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
             }
         });
         try {
-            rabbitTemplate.convertAndSend(RabbitMQConfig.SECKILL_EXCHANGE,
-                    RabbitMQConfig.SECKILL_ROUTING_KEY, msg, newCd);
+            rabbitTemplate.convertAndSend(RabbitMqConfig.SECKILL_EXCHANGE,
+                    RabbitMqConfig.SECKILL_ROUTING_KEY, msg, newCd);
         } catch (Exception e) {
             retrySend(msg, stockKey, orderedKey, userIdStr, attempt + 1);
         }

@@ -33,8 +33,9 @@ public class Order {
     private Integer quantity;
     @Schema(description = "订单总金额", example = "199.00")
     private BigDecimal totalAmount;
+    /** 订单状态：0-待支付，1-已支付，2-已取消 */
     @Schema(description = "订单状态：0-待支付，1-已支付，2-已取消", example = "0")
-    private Integer status; // 0待支付，1已支付，2已取消
+    private Integer status;
     @TableField(fill = FieldFill.INSERT)
     @Schema(description = "创建时间", example = "2026-04-21T10:00:00")
     private LocalDateTime createTime;

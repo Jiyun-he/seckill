@@ -6,7 +6,7 @@ import com.example.seckill.entity.Goods;
 import com.example.seckill.entity.Order;
 import com.example.seckill.entity.SeckillGoods;
 import com.example.seckill.mapper.OrderMapper;
-import com.example.seckill.config.RabbitMQConfig;
+import com.example.seckill.config.RabbitMqConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -59,7 +59,7 @@ public class SeckillOrderConsumer {
      * @param msg 消息体，包含 userId、seckillGoodsId、orderNo 三个键
      * @throws RuntimeException 秒杀商品或关联商品不存在、库存不足时抛出，触发 MQ 重试
      */
-    @RabbitListener(queues = RabbitMQConfig.SECKILL_QUEUE)
+    @RabbitListener(queues = RabbitMqConfig.SECKILL_QUEUE)
     @Transactional(rollbackFor = Exception.class)
     public void handleSeckillOrder(Map<String, Object> msg) {
         Long userId = Long.valueOf(msg.get("userId").toString());
@@ -108,7 +108,7 @@ public class SeckillOrderConsumer {
      *
      * @param msg 消息体，包含 userId、seckillGoodsId、orderNo 三个键
      */
-    @RabbitListener(queues = RabbitMQConfig.SECKILL_DLQ)
+    @RabbitListener(queues = RabbitMqConfig.SECKILL_DLQ)
     public void handleDeadLetter(Map<String, Object> msg) {
         Long userId = Long.valueOf(msg.get("userId").toString());
         Long seckillGoodsId = Long.valueOf(msg.get("seckillGoodsId").toString());

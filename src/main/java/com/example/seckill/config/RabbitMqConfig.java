@@ -21,7 +21,7 @@ import org.aopalliance.intercept.MethodInterceptor;
 
 @Slf4j
 @Configuration
-public class RabbitMQConfig {
+public class RabbitMqConfig {
     public static final String SECKILL_QUEUE = "seckill.queue";
     public static final String SECKILL_EXCHANGE = "seckill.exchange";
     public static final String SECKILL_ROUTING_KEY = "seckill.order";
@@ -69,8 +69,10 @@ public class RabbitMQConfig {
     public MethodInterceptor retryInterceptor() {
         return RetryInterceptorBuilder.stateful()
                 .maxAttempts(3)
-                .backOffOptions(1000, 2.0, 4000) // 1s, 2s, 4s
-                .recoverer(new RejectAndDontRequeueRecoverer()) // 耗尽后拒绝 → DLQ
+                // 1s, 2s, 4s
+                .backOffOptions(1000, 2.0, 4000)
+                // 耗尽后拒绝 → DLQ
+                .recoverer(new RejectAndDontRequeueRecoverer())
                 .build();
     }
 

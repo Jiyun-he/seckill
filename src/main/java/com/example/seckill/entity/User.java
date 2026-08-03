@@ -17,8 +17,9 @@ public class User {
     @TableId(type = IdType.AUTO)
     private Long id;
     private String username;
+    /** 加密后存储的密码 */
     @JsonIgnore
-    private String password; // 加密后存储
+    private String password;
     private String phone;
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;

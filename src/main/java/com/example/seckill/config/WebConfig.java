@@ -42,7 +42,9 @@ public class WebConfig implements WebMvcConfigurer {
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(loginInterceptor)
-                .addPathPatterns("/**") // 拦截所有
-                .excludePathPatterns("/user/login", "/user/register", "/hello", "/doc.html", "/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**", "/webjars/**", "/actuator/**"); // 排除登录注册、API文档、Actuator等
+                // 拦截所有
+                .addPathPatterns("/**")
+                // 排除登录注册、API文档、Actuator等
+                .excludePathPatterns("/user/login", "/user/register", "/hello", "/doc.html", "/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**", "/webjars/**", "/actuator/**");
     }
 }

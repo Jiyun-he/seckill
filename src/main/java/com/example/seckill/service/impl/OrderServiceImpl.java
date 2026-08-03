@@ -60,7 +60,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         order.setGoodsPrice(goods.getPrice());
         order.setQuantity(quantity);
         order.setTotalAmount(goods.getPrice().multiply(new BigDecimal(quantity)));
-        order.setStatus(0); // 待支付
+        // 待支付
+        order.setStatus(0);
         this.save(order);
 
         return OrderConverter.toVO(order);
