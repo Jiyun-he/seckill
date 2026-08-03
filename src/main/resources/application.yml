@@ -58,4 +58,4 @@ management:
 springdoc:
   api-docs:
     enabled: true
-  packages-to-scan: com.example.high_concurrency_seckill.controller
+  packages-to-scan: com.example.seckill.controller
