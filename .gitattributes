@@ -1,2 +1,4 @@
 /mvnw text eol=lf
 *.cmd text eol=crlf
+# JMeter 压测报告生成的前端资源，不参与 GitHub 语言统计
+test/report_*/** linguist-vendored
