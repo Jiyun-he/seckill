@@ -35,14 +35,14 @@ public class SeckillController {
             summary = "执行秒杀下单",
             description = "需要登录；下单成功返回订单号"
     )
-    public Result<String> doSeckill(@Parameter(description = "秒杀商品ID", required = true) @PathVariable Long seckillGoodsId,
+    public Result<Long> doSeckill(@Parameter(description = "秒杀商品ID", required = true) @PathVariable Long seckillGoodsId,
                                     HttpServletRequest request) {
         // 假设登录拦截器已经将userId存入request属性
         Long userId = (Long) request.getAttribute("userId");
         if (userId == null) {
             return Result.error("未登录");
         }
-        String orderNo = seckillService.seckill(userId, seckillGoodsId);
+        Long orderNo = seckillService.seckill(userId, seckillGoodsId);
         return Result.success(orderNo);
     }
 }

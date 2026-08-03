@@ -9,10 +9,8 @@ import java.time.LocalDateTime;
 @Data
 @Schema(description = "订单")
 public class OrderVO {
-    @Schema(description = "订单ID", example = "1")
-    private Long id;
-    @Schema(description = "订单号", example = "1713700000000a1b2c3d4")
-    private String orderNo;
+    @Schema(description = "订单号（雪花算法生成）", example = "1767225600000001")
+    private Long orderNo;
     @Schema(description = "用户ID", example = "2001")
     private Long userId;
     @Schema(description = "商品ID", example = "1001")

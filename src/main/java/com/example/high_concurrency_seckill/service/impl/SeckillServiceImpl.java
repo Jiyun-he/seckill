@@ -21,6 +21,8 @@ import org.springframework.stereotype.Service;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 
+import com.example.high_concurrency_seckill.util.SnowflakeIdUtil;
+
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.HashMap;
@@ -45,12 +47,19 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
     private static final String SECKILL_STOCK_KEY = "seckill:stock:";
     private static final String SECKILL_GOODS_CACHE_KEY = "seckill:goods:";
     private static final String SECKILL_ORDERED_SET_KEY = "seckill:ordered:";
+    /** Lua 扣减脚本返回码：库存 key 不存在 */
+    private static final long STOCK_NOT_INIT = -2L;
+    /** Lua 扣减脚本返回码：库存值非数字 */
+    private static final long STOCK_DATA_ERROR = -3L;
+    /** MQ 消息发送最大重试次数 */
+    private static final int MAX_MQ_RETRY_TIMES = 3;
     private static final RedisScript<Long> DECR_STOCK_LUA;
+    private static final RedisScript<Long> COMPENSATE_LUA;
 
     static {
-        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
-        script.setResultType(Long.class);
-        script.setScriptText(
+        DefaultRedisScript<Long> decrScript = new DefaultRedisScript<>();
+        decrScript.setResultType(Long.class);
+        decrScript.setScriptText(
                 "local stock = redis.call('get', KEYS[1])\n" +
                 "if not stock then\n" +
                 "  return -2\n" +
@@ -64,7 +73,16 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
                 "end\n" +
                 "return redis.call('decr', KEYS[1])\n"
         );
-        DECR_STOCK_LUA = script;
+        DECR_STOCK_LUA = decrScript;
+
+        DefaultRedisScript<Long> compensateScript = new DefaultRedisScript<>();
+        compensateScript.setResultType(Long.class);
+        compensateScript.setScriptText(
+                "redis.call('incr', KEYS[1])\n" +
+                "redis.call('srem', KEYS[2], ARGV[1])\n" +
+                "return 1\n"
+        );
+        COMPENSATE_LUA = compensateScript;
     }
 
     @PostConstruct  // 项目启动时自动预热
@@ -118,7 +136,7 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
     }
 
     @Override
-    public String seckill(Long userId, Long seckillGoodsId) {
+    public Long seckill(Long userId, Long seckillGoodsId) {
         // 1. 校验秒杀时间段（从数据库查商品信息?）
         SeckillGoods seckillGoods = this.getById(seckillGoodsId);
         if (seckillGoods == null) {
@@ -151,10 +169,10 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
             if (stock == null) {
                 throw new RuntimeException("系统繁忙");
             }
-            if (stock == -2L) {
+            if (stock == STOCK_NOT_INIT) {
                 throw new RuntimeException("库存未初始化");
             }
-            if (stock == -3L) {
+            if (stock == STOCK_DATA_ERROR) {
                 throw new RuntimeException("库存数据异常");
             }
             if (stock < 0) {
@@ -162,10 +180,10 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
             }
 
             // 5. 扣减成功，生成订单号，发送消息到MQ
-            String orderNo = generateOrderNo();
+            Long orderNo = generateOrderNo();
             sendSeckillOrderMessage(userId, seckillGoodsId, orderNo);
             stringRedisTemplate.opsForSet().add(orderedKey, userId.toString());
-            log.info("秒杀成功，生成订单号：" + orderNo + "，用户：" + userId);
+            log.info("秒杀成功，生成订单号：{}，用户：{}", orderNo, userId);
 
             return orderNo;
         } catch (InterruptedException e) {
@@ -179,13 +197,11 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
         }
     }
 
-    private String generateOrderNo() {
-        // 简单生成：时间戳+随机数（实际可用雪花算法）
-
-        return "SECKILL" + System.currentTimeMillis() + (int)(Math.random() * 1000);
+    private Long generateOrderNo() {
+        return SnowflakeIdUtil.nextId();
     }
 
-    private void sendSeckillOrderMessage(Long userId, Long seckillGoodsId, String orderNo) {
+    private void sendSeckillOrderMessage(Long userId, Long seckillGoodsId, Long orderNo) {
         Map<String, Object> msg = new HashMap<>();
         msg.put("userId", userId);
         msg.put("seckillGoodsId", seckillGoodsId);
@@ -195,7 +211,7 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
         String orderedKey = SECKILL_ORDERED_SET_KEY + seckillGoodsId;
         String userIdStr = userId.toString();
 
-        CorrelationData correlationData = new CorrelationData(orderNo);
+        CorrelationData correlationData = new CorrelationData(orderNo.toString());
         correlationData.getFuture().thenAccept(confirm -> {
             if (!confirm.isAck()) {
                 retrySend(msg, stockKey, orderedKey, userIdStr, 0);
@@ -213,9 +229,9 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
 
     private void retrySend(Map<String, Object> msg, String stockKey,
                            String orderedKey, String userIdStr, int attempt) {
-        if (attempt >= 3) {
+        if (attempt >= MAX_MQ_RETRY_TIMES) {
             compensateRedis(stockKey, orderedKey, userIdStr);
-            log.warn("MQ 重试 3 次均失败，已补偿 Redis");
+            log.warn("MQ 重试 {} 次均失败，已补偿 Redis", MAX_MQ_RETRY_TIMES);
             return;
         }
         long delay = (long) Math.pow(2, attempt) * 1000;
@@ -241,7 +257,7 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
     }
 
     private void compensateRedis(String stockKey, String orderedKey, String userIdStr) {
-        stringRedisTemplate.opsForValue().increment(stockKey);
-        stringRedisTemplate.opsForSet().remove(orderedKey, userIdStr);
+        stringRedisTemplate.execute(COMPENSATE_LUA,
+                java.util.Arrays.asList(stockKey, orderedKey), userIdStr);
     }
 }

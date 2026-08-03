@@ -7,7 +7,7 @@ import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFacto
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.retry.RejectAndDontRequeueRecoverer;
-import org.springframework.amqp.support.converter.JacksonJsonMessageConverter;
+import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -61,8 +61,8 @@ public class RabbitMQConfig {
 
     @Bean
     public MethodInterceptor retryInterceptor() {
-        return RetryInterceptorBuilder.stateless()
-                .maxRetries(3)
+        return RetryInterceptorBuilder.stateful()
+                .maxAttempts(3)
                 .backOffOptions(1000, 2.0, 4000) // 1s, 2s, 4s
                 .recoverer(new RejectAndDontRequeueRecoverer()) // 耗尽后拒绝 → DLQ
                 .build();
@@ -73,20 +73,20 @@ public class RabbitMQConfig {
             ConnectionFactory connectionFactory, MethodInterceptor retryInterceptor) {
         SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
         factory.setConnectionFactory(connectionFactory);
-        factory.setMessageConverter(new JacksonJsonMessageConverter());
+        factory.setMessageConverter(new Jackson2JsonMessageConverter());
         factory.setAdviceChain(retryInterceptor);
         return factory;
     }
 
     @Bean
     public MessageConverter messageConverter() {
-        return new JacksonJsonMessageConverter();
+        return new Jackson2JsonMessageConverter();
     }
 
     @Bean
     public RabbitTemplate rabbitTemplate(ConnectionFactory connectionFactory) {
         RabbitTemplate rabbitTemplate = new RabbitTemplate(connectionFactory);
-        rabbitTemplate.setMessageConverter(new JacksonJsonMessageConverter());
+        rabbitTemplate.setMessageConverter(new Jackson2JsonMessageConverter());
         rabbitTemplate.setConfirmCallback((correlationData, ack, cause) -> {
             String correlationId = correlationData != null ? correlationData.getId() : null;
             if (ack) {

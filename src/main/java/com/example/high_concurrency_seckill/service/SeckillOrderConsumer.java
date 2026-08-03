@@ -11,9 +11,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Arrays;
 import java.util.Map;
 
 @Slf4j
@@ -29,12 +32,25 @@ public class SeckillOrderConsumer {
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
+    private static final RedisScript<Long> COMPENSATE_LUA;
+
+    static {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+        script.setResultType(Long.class);
+        script.setScriptText(
+                "redis.call('incr', KEYS[1])\n" +
+                "redis.call('srem', KEYS[2], ARGV[1])\n" +
+                "return 1\n"
+        );
+        COMPENSATE_LUA = script;
+    }
+
     @RabbitListener(queues = RabbitMQConfig.SECKILL_QUEUE)
     @Transactional(rollbackFor = Exception.class)
     public void handleSeckillOrder(Map<String, Object> msg) {
         Long userId = Long.valueOf(msg.get("userId").toString());
         Long seckillGoodsId = Long.valueOf(msg.get("seckillGoodsId").toString());
-        String orderNo = msg.get("orderNo").toString();
+        Long orderNo = ((Number) msg.get("orderNo")).longValue();
 
         // 幂等性检查
         Long count = orderMapper.selectCount(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
@@ -76,10 +92,11 @@ public class SeckillOrderConsumer {
     public void handleDeadLetter(Map<String, Object> msg) {
         Long userId = Long.valueOf(msg.get("userId").toString());
         Long seckillGoodsId = Long.valueOf(msg.get("seckillGoodsId").toString());
-        String orderNo = msg.get("orderNo").toString();
+        Long orderNo = ((Number) msg.get("orderNo")).longValue();
 
         log.warn("订单 {} 进入死信队列，执行补偿", orderNo);
-        stringRedisTemplate.opsForValue().increment("seckill:stock:" + seckillGoodsId);
-        stringRedisTemplate.opsForSet().remove("seckill:ordered:" + seckillGoodsId, userId.toString());
+        stringRedisTemplate.execute(COMPENSATE_LUA,
+                Arrays.asList("seckill:stock:" + seckillGoodsId, "seckill:ordered:" + seckillGoodsId),
+                userId.toString());
     }
 }

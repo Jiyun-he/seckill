@@ -6,7 +6,7 @@ import com.example.high_concurrency_seckill.vo.SeckillGoodsVO;
 
 public interface SeckillService extends IService<SeckillGoods> {
     void loadSeckillStockToRedis();  // 预热库存到Redis
-    String seckill(Long userId, Long seckillGoodsId);  // 秒杀下单
+    Long seckill(Long userId, Long seckillGoodsId);  // 秒杀下单，返回订单号
 
     SeckillGoodsVO getSeckillGoodsDetail(Long id);
 }

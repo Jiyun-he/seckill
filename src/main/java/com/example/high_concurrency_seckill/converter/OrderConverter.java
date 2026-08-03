@@ -9,7 +9,6 @@ public class OrderConverter {
             return null;
         }
         OrderVO vo = new OrderVO();
-        vo.setId(order.getId());
         vo.setOrderNo(order.getOrderNo());
         vo.setUserId(order.getUserId());
         vo.setGoodsId(order.getGoodsId());

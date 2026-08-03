@@ -13,9 +13,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.example.high_concurrency_seckill.util.SnowflakeIdUtil;
+
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.UUID;
 
 @Service
 public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements OrderService {
@@ -59,8 +60,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         return OrderConverter.toVO(order);
     }
 
-    private String generateOrderNo() {
-        // 简单生成：时间戳+随机数，实际可使用雪花算法
-        return System.currentTimeMillis() + UUID.randomUUID().toString().substring(0, 8);
+    private Long generateOrderNo() {
+        return SnowflakeIdUtil.nextId();
     }
 }

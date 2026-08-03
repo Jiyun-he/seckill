@@ -54,8 +54,7 @@ CREATE TABLE `user` (
 );
 
 CREATE TABLE `order` (
-                         id BIGINT NOT NULL AUTO_INCREMENT,
-                         order_no VARCHAR(32) NOT NULL,
+                         order_no BIGINT NOT NULL COMMENT '订单号（雪花算法生成，主键）',
                          user_id BIGINT NOT NULL,
                          goods_id BIGINT NOT NULL,
                          seckill_goods_id BIGINT DEFAULT NULL,
@@ -65,8 +64,7 @@ CREATE TABLE `order` (
                          total_amount DECIMAL(10,2) NOT NULL,
                          status TINYINT NOT NULL DEFAULT 0,
                          create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-                         PRIMARY KEY (id),
-                         UNIQUE KEY uk_order_no (order_no),
+                         PRIMARY KEY (order_no),
                          UNIQUE KEY uk_user_seckill (user_id, seckill_goods_id),
                          KEY idx_user_id (user_id)
 );
