@@ -46,6 +46,15 @@ server:
 knife4j:
   enable: true
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+  endpoint:
+    health:
+      show-details: always
+
 springdoc:
   api-docs:
     enabled: true
