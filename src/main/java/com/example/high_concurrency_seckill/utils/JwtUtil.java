@@ -1,6 +1,10 @@
 package com.example.high_concurrency_seckill.utils;
 
-import io.jsonwebtoken.*;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtException;
+import io.jsonwebtoken.JwtParser;
+import io.jsonwebtoken.Jws;
+import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import lombok.Getter;
 import org.springframework.beans.factory.annotation.Value;
@@ -33,13 +37,13 @@ public class JwtUtil {
 
         return Jwts.builder()
                 // 设置主体（用户Id 或用户名）
-                .setSubject(userId.toString())
+                .subject(userId.toString())
                 // 设置签发时间
-                .setIssuedAt(now)
+                .issuedAt(now)
                 // 设置过期时间
-                .setExpiration(expiryDate)
+                .expiration(expiryDate)
                 // 配置签名用的 key 和算法
-                .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+                .signWith(getSigningKey(), Jwts.SIG.HS256)
                 // 生成最终 token 字符串
                 .compact();
     }
@@ -55,7 +59,7 @@ public class JwtUtil {
 
         Jws<Claims> jws = parser.parseSignedClaims(token);
 
-        return Long.parseLong(jws.getBody().getSubject());
+        return Long.parseLong(jws.getPayload().getSubject());
     }
 
     /**

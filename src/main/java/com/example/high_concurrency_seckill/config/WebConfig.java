@@ -25,7 +25,7 @@ public class WebConfig implements WebMvcConfigurer {
     private LoginInterceptor loginInterceptor;
 
     @Bean
-    public OpenAPI openAPI() {
+    public OpenAPI openApi() {
         return new OpenAPI()
                 .info(new Info()
                         .title("High Concurrency Seckill API")
@@ -37,6 +37,6 @@ public class WebConfig implements WebMvcConfigurer {
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(loginInterceptor)
                 .addPathPatterns("/**") // 拦截所有
-                .excludePathPatterns("/user/login", "/user/register", "/hello", "/doc.html", "/v3/api-docs/**", "/webjars/**"); // 排除登录注册等
+                .excludePathPatterns("/user/login", "/user/register", "/hello", "/doc.html", "/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**", "/webjars/**", "/actuator/**"); // 排除登录注册、API文档、Actuator等
     }
 }

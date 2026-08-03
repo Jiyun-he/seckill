@@ -12,6 +12,9 @@ import jakarta.servlet.http.HttpServletResponse;
 @Component
 public class LoginInterceptor implements HandlerInterceptor {
 
+    /** Authorization 请求头的 Bearer 前缀 */
+    private static final String TOKEN_PREFIX = "Bearer ";
+
     @Autowired
     private JwtUtil jwtUtil;
 
@@ -22,12 +25,12 @@ public class LoginInterceptor implements HandlerInterceptor {
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
         // 从请求头获取 token
         String token = request.getHeader("Authorization");
-        if (token == null || !token.startsWith("Bearer ")) {
+        if (token == null || !token.startsWith(TOKEN_PREFIX)) {
             response.setStatus(401);
             response.getWriter().write("未登录");
             return false;
         }
-        token = token.substring(7);
+        token = token.substring(TOKEN_PREFIX.length());
         // 验证 JWT 有效性
         if (!jwtUtil.validateToken(token)) {
             response.setStatus(401);
