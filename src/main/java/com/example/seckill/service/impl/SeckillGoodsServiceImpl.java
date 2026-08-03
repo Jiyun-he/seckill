@@ -6,6 +6,12 @@ import com.example.seckill.mapper.SeckillGoodsMapper;
 import com.example.seckill.service.SeckillGoodsService;
 import org.springframework.stereotype.Service;
 
+/**
+ * 秒杀商品服务实现。
+ *
+ * @author jiyunhe
+ */
+
 @Service
 public class SeckillGoodsServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillGoods> implements SeckillGoodsService {
 }

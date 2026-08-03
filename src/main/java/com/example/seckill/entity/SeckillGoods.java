@@ -8,6 +8,12 @@ import lombok.Data;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
+/**
+ * 秒杀商品实体。
+ *
+ * @author jiyunhe
+ */
+
 @Data
 @TableName("seckill_goods")
 @Schema(description = "秒杀商品")

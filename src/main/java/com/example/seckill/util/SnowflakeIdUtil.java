@@ -1,10 +1,11 @@
 package com.example.seckill.util;
-
 /**
  * 雪花算法 ID 生成器（单机简化版）
  * <p>
  * 结构：1bit 符号位 + 41bit 时间戳 + 5bit 数据中心ID + 5bit 工作机器ID + 12bit 序列号
  * 单机场景下 workerId 和 datacenterId 均为 0，每秒可生成约 400w 个 ID。
+ *
+ * @author clanguagetrainee
  */
 public class SnowflakeIdUtil {
 

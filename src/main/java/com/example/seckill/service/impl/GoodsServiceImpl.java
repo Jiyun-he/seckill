@@ -10,6 +10,12 @@ import com.example.seckill.service.GoodsService;
 import com.example.seckill.vo.GoodsVO;
 import org.springframework.stereotype.Service;
 
+/**
+ * 商品服务实现。
+ *
+ * @author jiyunhe
+ */
+
 @Service
 public class GoodsServiceImpl extends ServiceImpl<GoodsMapper, Goods> implements GoodsService {
     @Override

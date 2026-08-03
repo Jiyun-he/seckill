@@ -9,6 +9,12 @@ import org.springframework.web.servlet.HandlerInterceptor;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
+/**
+ * 登录拦截器，校验 JWT 并维护登录态。
+ *
+ * @author jiyunhe
+ */
+
 @Component
 public class LoginInterceptor implements HandlerInterceptor {
 

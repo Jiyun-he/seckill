@@ -18,6 +18,12 @@ import com.example.seckill.util.SnowflakeIdUtil;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
+/**
+ * 订单服务实现。
+ *
+ * @author jiyunhe
+ */
+
 @Service
 public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements OrderService {
 

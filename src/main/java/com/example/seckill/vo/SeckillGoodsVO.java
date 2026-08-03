@@ -6,6 +6,12 @@ import lombok.Data;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
+/**
+ * 秒杀商品视图对象。
+ *
+ * @author jiyunhe
+ */
+
 @Data
 @Schema(description = "秒杀商品")
 public class SeckillGoodsVO {

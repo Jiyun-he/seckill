@@ -5,6 +5,12 @@ import lombok.Data;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 
+/**
+ * 创建订单请求体。
+ *
+ * @author jiyunhe
+ */
+
 @Data
 @Schema(description = "创建订单请求体")
 public class OrderDTO {

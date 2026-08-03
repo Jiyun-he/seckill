@@ -13,6 +13,12 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.aopalliance.intercept.MethodInterceptor;
 
+/**
+ * RabbitMQ 交换机、队列、重试与容器工厂配置。
+ *
+ * @author jiyunhe
+ */
+
 @Slf4j
 @Configuration
 public class RabbitMQConfig {

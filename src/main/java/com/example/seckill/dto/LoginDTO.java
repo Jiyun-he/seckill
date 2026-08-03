@@ -4,6 +4,12 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import jakarta.validation.constraints.NotBlank;
 
+/**
+ * 登录/注册请求体。
+ *
+ * @author jiyunhe
+ */
+
 @Data
 @Schema(description = "登录/注册请求体")
 public class LoginDTO {

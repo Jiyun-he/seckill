@@ -11,6 +11,12 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * 秒杀下单接口。
+ *
+ * @author jiyunhe
+ */
+
 @RestController
 @RequestMapping("/seckill")
 @Tag(name = "秒杀")

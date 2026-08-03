@@ -6,6 +6,12 @@ import lombok.Data;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
+/**
+ * 商品视图对象。
+ *
+ * @author jiyunhe
+ */
+
 @Data
 @Schema(description = "商品")
 public class GoodsVO {

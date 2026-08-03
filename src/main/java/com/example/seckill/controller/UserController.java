@@ -9,6 +9,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * 用户注册与登录接口。
+ *
+ * @author jiyunhe
+ */
+
 @RestController
 @RequestMapping("/user")
 @Tag(name = "用户")

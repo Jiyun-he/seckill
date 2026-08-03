@@ -31,6 +31,12 @@ import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * 秒杀服务实现。
+ *
+ * @author jiyunhe
+ */
+
 @Slf4j
 @Service
 public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillGoods> implements SeckillService {

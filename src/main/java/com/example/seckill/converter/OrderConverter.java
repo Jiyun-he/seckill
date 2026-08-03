@@ -3,6 +3,12 @@ package com.example.seckill.converter;
 import com.example.seckill.entity.Order;
 import com.example.seckill.vo.OrderVO;
 
+/**
+ * 订单实体与视图对象转换器。
+ *
+ * @author jiyunhe
+ */
+
 public class OrderConverter {
     public static OrderVO toVO(Order order) {
         if (order == null) {

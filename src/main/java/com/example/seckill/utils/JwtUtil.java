@@ -13,6 +13,12 @@ import org.springframework.stereotype.Component;
 import javax.crypto.SecretKey;
 import java.util.Date;
 
+/**
+ * JWT 生成、解析与校验工具类。
+ *
+ * @author jiyunhe
+ */
+
 @Component
 public class JwtUtil {
 

@@ -3,6 +3,12 @@ package com.example.seckill.common;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
+/**
+ * 统一响应包装类。
+ *
+ * @author jiyunhe
+ */
+
 @Data
 @Schema(description = "统一响应包装")
 public class Result<T> {

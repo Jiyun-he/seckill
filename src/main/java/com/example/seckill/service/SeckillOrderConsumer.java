@@ -19,6 +19,12 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.Arrays;
 import java.util.Map;
 
+/**
+ * 秒杀订单 MQ 消费者，落库与死信补偿。
+ *
+ * @author jiyunhe
+ */
+
 @Slf4j
 @Component
 public class SeckillOrderConsumer {
@@ -45,6 +51,14 @@ public class SeckillOrderConsumer {
         COMPENSATE_LUA = script;
     }
 
+    /**
+     * 消费秒杀订单队列消息，异步落库创建订单并扣减数据库库存。
+     * 先按订单号做幂等检查，再校验秒杀商品与关联商品是否存在，插入订单后
+     * 通过乐观锁扣减库存。
+     *
+     * @param msg 消息体，包含 userId、seckillGoodsId、orderNo 三个键
+     * @throws RuntimeException 秒杀商品或关联商品不存在、库存不足时抛出，触发 MQ 重试
+     */
     @RabbitListener(queues = RabbitMQConfig.SECKILL_QUEUE)
     @Transactional(rollbackFor = Exception.class)
     public void handleSeckillOrder(Map<String, Object> msg) {
@@ -88,6 +102,12 @@ public class SeckillOrderConsumer {
         }
     }
 
+    /**
+     * 消费死信队列消息，对扣减成功的 Redis 库存与已下单记录执行补偿：
+     * 通过 Lua 脚本原子地恢复 Redis 库存并将用户移出已下单集合，保证数据最终一致。
+     *
+     * @param msg 消息体，包含 userId、seckillGoodsId、orderNo 三个键
+     */
     @RabbitListener(queues = RabbitMQConfig.SECKILL_DLQ)
     public void handleDeadLetter(Map<String, Object> msg) {
         Long userId = Long.valueOf(msg.get("userId").toString());

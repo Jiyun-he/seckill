@@ -11,6 +11,12 @@ import org.springframework.web.servlet.ModelAndView;
 
 import java.io.IOException;
 
+/**
+ * 全局异常处理器。
+ *
+ * @author clanguagetrainee
+ */
+
 @Slf4j
 @Component
 public class GlobalExceptionHandler implements HandlerExceptionResolver {
