@@ -1,5 +1,6 @@
 package com.example.seckill.controller;
 
+import com.example.seckill.common.BusinessException;
 import com.example.seckill.common.Result;
 import com.example.seckill.dto.OrderDTO;
 import com.example.seckill.service.OrderService;
@@ -9,6 +10,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -38,7 +40,7 @@ public class OrderController {
         // 从请求属性获取userId（拦截器已存入）
         Long userId = (Long) request.getAttribute("userId");
         if (userId == null) {
-            return Result.error("未登录");
+            throw new BusinessException(HttpStatus.UNAUTHORIZED, "未登录");
         }
         OrderVO order = orderService.createOrder(userId, orderDTO.getGoodsId(), orderDTO.getQuantity());
         return Result.success(order);

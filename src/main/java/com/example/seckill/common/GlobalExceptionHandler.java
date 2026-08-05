@@ -1,59 +1,52 @@
 package com.example.seckill.common;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
-import org.springframework.web.servlet.HandlerExceptionResolver;
-import org.springframework.web.servlet.ModelAndView;
-
-import java.io.IOException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /**
- * 全局异常处理器。
+ * 全局异常处理器，将异常映射为语义化的 HTTP 状态码与统一响应体。
  *
  * @author clanguagetrainee
  */
 
 @Slf4j
-@Component
-public class GlobalExceptionHandler implements HandlerExceptionResolver {
+@RestControllerAdvice
+public class GlobalExceptionHandler {
 
-    private final ObjectMapper objectMapper;
-
-    public GlobalExceptionHandler(ObjectMapper objectMapper) {
-        this.objectMapper = objectMapper;
+    /**
+     * 参数校验失败，返回 400。
+     */
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<Result<Void>> handleValidException(MethodArgumentNotValidException e) {
+        String msg = e.getBindingResult().getFieldErrors().stream()
+                .findFirst()
+                .map(f -> f.getField() + f.getDefaultMessage())
+                .orElse("参数校验失败");
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(Result.error(HttpStatus.BAD_REQUEST.value(), msg));
     }
 
-    @Override
-    public ModelAndView resolveException(HttpServletRequest request,
-                                          HttpServletResponse response,
-                                          Object handler, Exception ex) {
-        Result<Void> result;
-        if (ex instanceof MethodArgumentNotValidException e) {
-            String msg = e.getBindingResult().getFieldErrors().stream()
-                    .findFirst()
-                    .map(f -> f.getField() + f.getDefaultMessage())
-                    .orElse("参数校验失败");
-            result = Result.error(msg);
-        } else if (ex instanceof RuntimeException e) {
-            log.error("运行时异常", e);
-            result = Result.error(e.getMessage());
-        } else {
-            log.error("系统异常", ex);
-            result = Result.error("系统异常");
-        }
+    /**
+     * 业务异常，按异常携带的状态码返回。
+     */
+    @ExceptionHandler(BusinessException.class)
+    public ResponseEntity<Result<Void>> handleBusinessException(BusinessException e) {
+        HttpStatus status = e.getStatus();
+        return ResponseEntity.status(status)
+                .body(Result.error(status.value(), e.getMessage()));
+    }
 
-        try {
-            response.setContentType("application/json;charset=UTF-8");
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(objectMapper.writeValueAsString(result));
-        } catch (IOException e) {
-            log.error("响应写入失败", e);
-        }
-
-        return new ModelAndView();
+    /**
+     * 兜底系统异常，返回 500，不暴露堆栈。
+     */
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<Result<Void>> handleException(Exception e) {
+        log.error("系统异常", e);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Result.error(HttpStatus.INTERNAL_SERVER_ERROR.value(), "系统异常"));
     }
 }

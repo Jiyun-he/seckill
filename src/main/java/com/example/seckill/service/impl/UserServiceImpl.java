@@ -2,12 +2,14 @@ package com.example.seckill.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.example.seckill.common.BusinessException;
 import com.example.seckill.entity.User;
 import com.example.seckill.mapper.UserMapper;
 import com.example.seckill.service.UserService;
 import com.example.seckill.utils.JwtUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -36,7 +38,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(User::getUsername, username);
         if (this.count(wrapper) > 0) {
-            throw new RuntimeException("用户名已存在");
+            throw new BusinessException(HttpStatus.CONFLICT, "用户名已存在");
         }
         User user = new User();
         user.setUsername(username);
@@ -54,7 +56,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         wrapper.eq(User::getUsername, username);
         User user = this.getOne(wrapper);
         if (user == null || !passwordEncoder.matches(password, user.getPassword())) {
-            throw new RuntimeException("用户名或密码错误");
+            throw new BusinessException(HttpStatus.UNAUTHORIZED, "用户名或密码错误");
         }
         // 生成token
         String token = jwtUtil.generateToken(user.getId());

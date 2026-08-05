@@ -1,5 +1,6 @@
 package com.example.seckill.controller;
 
+import com.example.seckill.common.BusinessException;
 import com.example.seckill.common.Result;
 import com.example.seckill.service.SeckillService;
 import com.example.seckill.vo.SeckillGoodsVO;
@@ -9,6 +10,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -31,7 +33,7 @@ public class SeckillController {
     public Result<SeckillGoodsVO> getSeckillGoods(@Parameter(description = "秒杀商品ID", required = true) @PathVariable Long id) {
         SeckillGoodsVO goods = seckillService.getSeckillGoodsDetail(id);
         if (goods == null) {
-            return Result.error("秒杀商品不存在");
+            throw new BusinessException(HttpStatus.NOT_FOUND, "秒杀商品不存在");
         }
         return Result.success(goods);
     }
@@ -46,7 +48,7 @@ public class SeckillController {
         // 假设登录拦截器已经将userId存入request属性
         Long userId = (Long) request.getAttribute("userId");
         if (userId == null) {
-            return Result.error("未登录");
+            throw new BusinessException(HttpStatus.UNAUTHORIZED, "未登录");
         }
         Long orderNo = seckillService.seckill(userId, seckillGoodsId);
         return Result.success(orderNo);

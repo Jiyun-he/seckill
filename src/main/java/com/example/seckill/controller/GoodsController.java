@@ -1,6 +1,7 @@
 package com.example.seckill.controller;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.example.seckill.common.BusinessException;
 import com.example.seckill.common.Result;
 import com.example.seckill.service.GoodsService;
 import com.example.seckill.vo.GoodsVO;
@@ -9,6 +10,7 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -44,7 +46,7 @@ public class GoodsController {
     public Result<GoodsVO> detail(@Parameter(description = "商品ID", required = true) @PathVariable Long id) {
         GoodsVO goods = goodsService.getGoodsDetail(id);
         if (goods == null) {
-            return Result.error("商品不存在");
+            throw new BusinessException(HttpStatus.NOT_FOUND, "商品不存在");
         }
         return Result.success(goods);
     }
