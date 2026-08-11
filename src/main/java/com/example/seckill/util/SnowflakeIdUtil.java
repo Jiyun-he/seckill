@@ -1,12 +1,18 @@
 package com.example.seckill.util;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
 /**
- * 雪花算法 ID 生成器（单机简化版）
+ * 雪花算法 ID 生成器。
  * <p>
- * 结构：1bit 符号位 + 41bit 时间戳 + 5bit 数据中心ID + 5bit 工作机器ID + 12bit 序列号
- * 单机场景下 workerId 和 datacenterId 均为 0，每秒可生成约 400w 个 ID。
+ * 结构：1bit 符号位 + 41bit 时间戳 + 5bit 数据中心ID + 5bit 工作机器ID + 12bit 序列号。
+ * workerId 与 datacenterId 由配置注入（{@code snowflake.worker-id} / {@code snowflake.datacenter-id}），
+ * 多实例部署时需为每个实例配置不同的值，避免 ID 冲突。
  *
  * @author clanguagetrainee
  */
+@Component
 public class SnowflakeIdUtil {
 
     /** 起始时间戳：2026-01-01 00:00:00 (UTC+8) */
@@ -42,10 +48,8 @@ public class SnowflakeIdUtil {
     /** 上次生成 ID 的时间戳 */
     private long lastTimestamp = -1L;
 
-    /** 单例 */
-    private static final SnowflakeIdUtil INSTANCE = new SnowflakeIdUtil(0, 0);
-
-    private SnowflakeIdUtil(long workerId, long datacenterId) {
+    public SnowflakeIdUtil(@Value("${snowflake.worker-id:0}") long workerId,
+                           @Value("${snowflake.datacenter-id:0}") long datacenterId) {
         if (workerId > MAX_WORKER_ID || workerId < 0) {
             throw new IllegalArgumentException("workerId 必须在 0~" + MAX_WORKER_ID + " 之间");
         }
@@ -57,13 +61,9 @@ public class SnowflakeIdUtil {
     }
 
     /**
-     * 生成下一个 ID（线程安全）
+     * 生成下一个 ID（线程安全）。
      */
-    public static synchronized long nextId() {
-        return INSTANCE.next();
-    }
-
-    private synchronized long next() {
+    public synchronized long nextId() {
         long timestamp = System.currentTimeMillis();
 
         // 时钟回拨：如果当前时间小于上次生成 ID 的时间，等待直到追上

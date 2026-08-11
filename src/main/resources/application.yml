@@ -40,6 +40,9 @@ mybatis-plus:
 jwt:
   secret: "your-256-bit-secret-your-256-bit-secret" # at least 32character
   expiration: 86400000 # 24h
+snowflake:
+  worker-id: ${SNOWFLAKE_WORKER_ID:0}
+  datacenter-id: ${SNOWFLAKE_DATACENTER_ID:0}
 server:
   port: 8080
 
