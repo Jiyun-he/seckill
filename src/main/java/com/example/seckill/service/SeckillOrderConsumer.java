@@ -106,7 +106,7 @@ public class SeckillOrderConsumer {
      * 消费死信队列消息，对扣减成功的 Redis 库存与已下单记录执行补偿：
      * 通过 Lua 脚本原子地恢复 Redis 库存并将用户移出已下单集合，保证数据最终一致。
      *
-     * @param msg 消息体，包含 userId、seckillGoodsId、orderNo 三个键
+     * @param msg 消息体，包含 userId、seckillGoodsId、orderNo、startTime（活动版本）四个键
      */
     @RabbitListener(queues = RabbitMqConfig.SECKILL_DLQ)
     public void handleDeadLetter(Map<String, Object> msg) {
@@ -114,9 +114,12 @@ public class SeckillOrderConsumer {
         Long seckillGoodsId = Long.valueOf(msg.get("seckillGoodsId").toString());
         Long orderNo = ((Number) msg.get("orderNo")).longValue();
 
+        String startTime = (String) msg.get("startTime");
+
         log.warn("订单 {} 进入死信队列，执行补偿", orderNo);
         stringRedisTemplate.execute(COMPENSATE_LUA,
-                Arrays.asList("seckill:stock:" + seckillGoodsId, "seckill:ordered:" + seckillGoodsId),
+                Arrays.asList("seckill:stock:" + seckillGoodsId + ":" + startTime,
+                              "seckill:ordered:" + seckillGoodsId + ":" + startTime),
                 userId.toString());
     }
 }
