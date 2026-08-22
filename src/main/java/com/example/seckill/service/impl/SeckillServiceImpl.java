@@ -1,6 +1,7 @@
 package com.example.seckill.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.example.seckill.common.BusinessException;
 import com.example.seckill.config.RabbitMqConfig;
 import com.example.seckill.converter.SeckillGoodsConverter;
 import com.example.seckill.entity.SeckillGoods;
@@ -16,6 +17,7 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
@@ -24,6 +26,7 @@ import lombok.extern.slf4j.Slf4j;
 import com.example.seckill.util.SnowflakeIdUtil;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -42,23 +45,25 @@ import java.util.concurrent.TimeUnit;
 public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillGoods> implements SeckillService {
 
     @Autowired
-    private RedisTemplate<String, Object> redisTemplate;
+    private RedisTemplate<String, SeckillGoods> redisTemplate;
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
     @Autowired
     private RedissonClient redissonClient;
     @Autowired
     private RabbitTemplate rabbitTemplate;
+    @Autowired
+    private SnowflakeIdUtil snowflakeIdUtil;
 
     private static final String SECKILL_STOCK_KEY = "seckill:stock:";
     private static final String SECKILL_GOODS_CACHE_KEY = "seckill:goods:";
     private static final String SECKILL_ORDERED_SET_KEY = "seckill:ordered:";
+    /** 活动版本格式：startTime 暂代版本标识（活动配置冻结后不可变） */
+    private static final DateTimeFormatter ACTIVITY_VERSION_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
     /** Lua 扣减脚本返回码：库存 key 不存在 */
     private static final long STOCK_NOT_INIT = -2L;
     /** Lua 扣减脚本返回码：库存值非数字 */
     private static final long STOCK_DATA_ERROR = -3L;
-    /** MQ 消息发送最大重试次数 */
-    private static final int MAX_MQ_RETRY_TIMES = 3;
     private static final RedisScript<Long> DECR_STOCK_LUA;
     private static final RedisScript<Long> COMPENSATE_LUA;
 
@@ -92,6 +97,21 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
     }
 
     /**
+     * 生成带活动版本的库存 key：seckill:stock:{id}:{startTime}。
+     * startTime 在此暂代活动版本，活动配置冻结后不可变，从而隔离不同场次的库存。
+     */
+    private String buildStockKey(Long seckillGoodsId, LocalDateTime startTime) {
+        return SECKILL_STOCK_KEY + seckillGoodsId + ":" + startTime.format(ACTIVITY_VERSION_FORMATTER);
+    }
+
+    /**
+     * 生成带活动版本的一人一单 key：seckill:ordered:{id}:{startTime}。
+     */
+    private String buildOrderedKey(Long seckillGoodsId, LocalDateTime startTime) {
+        return SECKILL_ORDERED_SET_KEY + seckillGoodsId + ":" + startTime.format(ACTIVITY_VERSION_FORMATTER);
+    }
+
+    /**
      * 项目启动时自动预热。
      */
     @PostConstruct
@@ -99,7 +119,7 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
     public void loadSeckillStockToRedis() {
         List<SeckillGoods> list = this.list();
         for (SeckillGoods sg : list) {
-            String key = SECKILL_STOCK_KEY + sg.getId();
+            String key = buildStockKey(sg.getId(), sg.getStartTime());
             // 只在 key 不存在时设置，避免重启覆盖已变更的 Redis 库存
             Boolean absent = stringRedisTemplate.opsForValue().setIfAbsent(key, String.valueOf(sg.getSeckillStock()));
             if (Boolean.TRUE.equals(absent)) {
@@ -107,19 +127,22 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
             } else {
                 log.info("秒杀商品ID：" + sg.getId() + " Redis 库存已存在，跳过预热");
             }
+            // 清理旧版（无活动版本）的库存与一人一单 key，避免历史残留
+            stringRedisTemplate.delete(SECKILL_STOCK_KEY + sg.getId());
+            stringRedisTemplate.delete(SECKILL_ORDERED_SET_KEY + sg.getId());
         }
     }
 
     @Override
     public SeckillGoodsVO getSeckillGoodsDetail(Long id) {
         String cacheKey = SECKILL_GOODS_CACHE_KEY + id;
-        SeckillGoods cached = (SeckillGoods) redisTemplate.opsForValue().get(cacheKey);
+        SeckillGoods cached = redisTemplate.opsForValue().get(cacheKey);
         if (cached != null) {
             if (cached.getId() == null) {
                 return null;
             }
             SeckillGoodsVO vo = SeckillGoodsConverter.toVO(cached);
-            String stockStr = stringRedisTemplate.opsForValue().get(SECKILL_STOCK_KEY + id);
+            String stockStr = stringRedisTemplate.opsForValue().get(buildStockKey(cached.getId(), cached.getStartTime()));
             if (stockStr != null) {
                 vo.setSeckillStock(Integer.parseInt(stockStr));
             }
@@ -137,7 +160,7 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
         redisTemplate.opsForValue().set(cacheKey, seckillGoods, expire, TimeUnit.SECONDS);
         SeckillGoodsVO vo = SeckillGoodsConverter.toVO(seckillGoods);
         // 从 Redis 读取实时库存覆盖缓存中的旧值
-        String stockStr = stringRedisTemplate.opsForValue().get(SECKILL_STOCK_KEY + id);
+        String stockStr = stringRedisTemplate.opsForValue().get(buildStockKey(seckillGoods.getId(), seckillGoods.getStartTime()));
         if (stockStr != null) {
             vo.setSeckillStock(Integer.parseInt(stockStr));
         }
@@ -149,11 +172,11 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
         // 1. 校验秒杀时间段（从数据库查商品信息?）
         SeckillGoods seckillGoods = this.getById(seckillGoodsId);
         if (seckillGoods == null) {
-            throw new RuntimeException("秒杀商品不存在");
+            throw new BusinessException(HttpStatus.NOT_FOUND, "秒杀商品不存在");
         }
         LocalDateTime now = LocalDateTime.now();
         if (now.isBefore(seckillGoods.getStartTime()) || now.isAfter(seckillGoods.getEndTime())) {
-            throw new RuntimeException("不在秒杀时间段内");
+            throw new BusinessException(HttpStatus.FORBIDDEN, "不在秒杀时间段内");
         }
 
         // 2. 分布式锁：防止同一用户重复秒杀（锁key包含userId和商品Id）
@@ -163,41 +186,41 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
             // 尝试加锁，最多等待3秒，锁自动释放时间10秒（避免死锁）
             boolean locked = lock.tryLock(3, 10, TimeUnit.SECONDS);
             if (!locked) {
-                throw new RuntimeException("请勿重复下单");
+                throw new BusinessException(HttpStatus.CONFLICT, "请勿重复下单");
             }
 
             // 3. 一人一单检查：Redis Set 持久化记录已下单用户
-            String orderedKey = SECKILL_ORDERED_SET_KEY + seckillGoodsId;
+            String orderedKey = buildOrderedKey(seckillGoodsId, seckillGoods.getStartTime());
             if (Boolean.TRUE.equals(stringRedisTemplate.opsForSet().isMember(orderedKey, userId.toString()))) {
-                throw new RuntimeException("已参与过该秒杀");
+                throw new BusinessException(HttpStatus.CONFLICT, "已参与过该秒杀");
             }
 
             // 4. Redis Lua 脚本原子扣减库存
-            String stockKey = SECKILL_STOCK_KEY + seckillGoodsId;
+            String stockKey = buildStockKey(seckillGoodsId, seckillGoods.getStartTime());
             Long stock = stringRedisTemplate.execute(DECR_STOCK_LUA, Collections.singletonList(stockKey));
             if (stock == null) {
-                throw new RuntimeException("系统繁忙");
+                throw new BusinessException(HttpStatus.TOO_MANY_REQUESTS, "系统繁忙");
             }
             if (stock == STOCK_NOT_INIT) {
-                throw new RuntimeException("库存未初始化");
+                throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR, "库存未初始化");
             }
             if (stock == STOCK_DATA_ERROR) {
-                throw new RuntimeException("库存数据异常");
+                throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR, "库存数据异常");
             }
             if (stock < 0) {
-                throw new RuntimeException("库存不足");
+                throw new BusinessException(HttpStatus.CONFLICT, "库存不足");
             }
 
             // 5. 扣减成功，生成订单号，发送消息到MQ
             Long orderNo = generateOrderNo();
-            sendSeckillOrderMessage(userId, seckillGoodsId, orderNo);
+            sendSeckillOrderMessage(userId, seckillGoods, orderNo);
             stringRedisTemplate.opsForSet().add(orderedKey, userId.toString());
             log.info("秒杀成功，生成订单号：{}，用户：{}", orderNo, userId);
 
             return orderNo;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new RuntimeException("系统繁忙");
+            throw new BusinessException(HttpStatus.TOO_MANY_REQUESTS, "系统繁忙");
         } finally {
             // 确保释放锁（只有当前线程持有的锁才释放）
             if (lock.isHeldByCurrentThread()) {
@@ -207,23 +230,28 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
     }
 
     private Long generateOrderNo() {
-        return SnowflakeIdUtil.nextId();
+        return snowflakeIdUtil.nextId();
     }
 
-    private void sendSeckillOrderMessage(Long userId, Long seckillGoodsId, Long orderNo) {
+    private void sendSeckillOrderMessage(Long userId, SeckillGoods seckillGoods, Long orderNo) {
+        Long seckillGoodsId = seckillGoods.getId();
         Map<String, Object> msg = new HashMap<>(16);
         msg.put("userId", userId);
         msg.put("seckillGoodsId", seckillGoodsId);
         msg.put("orderNo", orderNo);
+        // startTime 作为活动版本标识，供死信消费者还原带版本的库存 key
+        msg.put("startTime", seckillGoods.getStartTime().format(ACTIVITY_VERSION_FORMATTER));
 
-        String stockKey = SECKILL_STOCK_KEY + seckillGoodsId;
-        String orderedKey = SECKILL_ORDERED_SET_KEY + seckillGoodsId;
+        String stockKey = buildStockKey(seckillGoodsId, seckillGoods.getStartTime());
+        String orderedKey = buildOrderedKey(seckillGoodsId, seckillGoods.getStartTime());
         String userIdStr = userId.toString();
 
         CorrelationData correlationData = new CorrelationData(orderNo.toString());
         correlationData.getFuture().thenAccept(confirm -> {
             if (!confirm.isAck()) {
-                retrySend(msg, stockKey, orderedKey, userIdStr, 0);
+                // confirm 未 ack，直接补偿；真正的重试由后续的消息状态 + 定时 retry job 完成
+                compensateRedis(stockKey, orderedKey, userIdStr);
+                log.warn("订单 {} MQ confirm 未 ack，已补偿 Redis", orderNo);
             }
         });
 
@@ -232,36 +260,7 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
                     RabbitMqConfig.SECKILL_ROUTING_KEY, msg, correlationData);
         } catch (Exception e) {
             compensateRedis(stockKey, orderedKey, userIdStr);
-            throw new RuntimeException("消息发送失败", e);
-        }
-    }
-
-    private void retrySend(Map<String, Object> msg, String stockKey,
-                           String orderedKey, String userIdStr, int attempt) {
-        if (attempt >= MAX_MQ_RETRY_TIMES) {
-            compensateRedis(stockKey, orderedKey, userIdStr);
-            log.warn("MQ 重试 {} 次均失败，已补偿 Redis", MAX_MQ_RETRY_TIMES);
-            return;
-        }
-        long delay = (long) Math.pow(2, attempt) * 1000;
-        try {
-            Thread.sleep(delay);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return;
-        }
-
-        CorrelationData newCd = new CorrelationData(String.valueOf(msg.get("orderNo")));
-        newCd.getFuture().thenAccept(confirm -> {
-            if (!confirm.isAck()) {
-                retrySend(msg, stockKey, orderedKey, userIdStr, attempt + 1);
-            }
-        });
-        try {
-            rabbitTemplate.convertAndSend(RabbitMqConfig.SECKILL_EXCHANGE,
-                    RabbitMqConfig.SECKILL_ROUTING_KEY, msg, newCd);
-        } catch (Exception e) {
-            retrySend(msg, stockKey, orderedKey, userIdStr, attempt + 1);
+            throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR, "消息发送失败", e);
         }
     }
 

@@ -2,6 +2,7 @@ package com.example.seckill.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.example.seckill.common.BusinessException;
 import com.example.seckill.converter.OrderConverter;
 import com.example.seckill.entity.Goods;
 import com.example.seckill.entity.Order;
@@ -10,6 +11,7 @@ import com.example.seckill.service.GoodsService;
 import com.example.seckill.service.OrderService;
 import com.example.seckill.vo.OrderVO;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,16 +32,19 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     @Autowired
     private GoodsService goodsService;
 
+    @Autowired
+    private SnowflakeIdUtil snowflakeIdUtil;
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public OrderVO createOrder(Long userId, Long goodsId, Integer quantity) {
         // 1. 查询商品（加锁？简单做法不加，后续秒杀会加）
         Goods goods = goodsService.getById(goodsId);
         if (goods == null) {
-            throw new RuntimeException("商品不存在");
+            throw new BusinessException(HttpStatus.NOT_FOUND, "商品不存在");
         }
         if (goods.getStock() < quantity) {
-            throw new RuntimeException("库存不足");
+            throw new BusinessException(HttpStatus.CONFLICT, "库存不足");
         }
 
         // 2. 扣减库存（使用乐观锁，避免超卖）
@@ -48,7 +53,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                 .ge(Goods::getStock, quantity)
                 .setSql("stock = stock - " + quantity));
         if (!updated) {
-            throw new RuntimeException("库存不足");
+            throw new BusinessException(HttpStatus.CONFLICT, "库存不足");
         }
 
         // 3. 生成订单
@@ -68,6 +73,6 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     }
 
     private Long generateOrderNo() {
-        return SnowflakeIdUtil.nextId();
+        return snowflakeIdUtil.nextId();
     }
 }
