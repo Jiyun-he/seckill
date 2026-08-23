@@ -19,14 +19,14 @@ public interface SeckillService extends IService<SeckillGoods> {
     void loadSeckillStockToRedis();
 
     /**
-     * 执行秒杀下单：校验秒杀时间段，通过 Redisson 分布式锁保证同一用户串行处理，
-     * 使用 Lua 脚本原子扣减 Redis 库存，扣减成功后生成订单号并发送消息到 MQ 异步落库，
-     * 同时将用户写入已下单集合实现"一人一单"。
+     * 执行秒杀下单：从 Redis 读取活动时间段（不访问 MySQL），先生成订单号，
+     * 再由单个 Lua 脚本原子完成「校验时间段 + 一人一单查重 + 扣减库存 + 占位 + 建立订单预占状态」，
+     * 成功后发送消息到 MQ 异步落库。
      *
      * @param userId        秒杀用户 ID
      * @param seckillGoodsId 秒杀商品 ID
      * @return 生成的订单号（雪花算法）
-     * @throws RuntimeException 秒杀商品不存在、不在秒杀时间段、重复下单、库存不足、
+     * @throws RuntimeException 秒杀活动不存在、不在秒杀时间段、重复下单、库存不足、
      *                          库存未初始化、库存数据异常、系统繁忙等场景抛出
      */
     Long seckill(Long userId, Long seckillGoodsId);

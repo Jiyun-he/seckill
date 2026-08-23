@@ -15,6 +15,8 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.Arrays;
 import java.util.Map;
@@ -46,6 +48,7 @@ public class SeckillOrderConsumer {
         script.setScriptText(
                 "redis.call('incr', KEYS[1])\n" +
                 "redis.call('srem', KEYS[2], ARGV[1])\n" +
+                "redis.call('del', KEYS[3])\n" +
                 "return 1\n"
         );
         COMPENSATE_LUA = script;
@@ -100,6 +103,14 @@ public class SeckillOrderConsumer {
         if (!updated) {
             throw new RuntimeException("库存不足");
         }
+
+        // 事务提交成功后清除订单预占状态；超时残留由后续对账任务兜底
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                stringRedisTemplate.delete("seckill:order:" + orderNo);
+            }
+        });
     }
 
     /**
@@ -119,7 +130,8 @@ public class SeckillOrderConsumer {
         log.warn("订单 {} 进入死信队列，执行补偿", orderNo);
         stringRedisTemplate.execute(COMPENSATE_LUA,
                 Arrays.asList("seckill:stock:" + seckillGoodsId + ":" + startTime,
-                              "seckill:ordered:" + seckillGoodsId + ":" + startTime),
+                              "seckill:ordered:" + seckillGoodsId + ":" + startTime,
+                              "seckill:order:" + orderNo),
                 userId.toString());
     }
 }

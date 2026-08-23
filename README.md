@@ -1,6 +1,6 @@
 # High Concurrency Seckill
 
-`High_concurrency_seckill` 是一个基于 Spring Boot 构建的高并发秒杀系统后端项目。项目围绕用户认证、商品查询、秒杀商品缓存、Redis 库存预热、Lua 原子扣减、Redisson 分布式锁、RabbitMQ 异步下单、MySQL 最终落库、死信队列补偿和 Docker 化部署，构建了一条较完整的电商秒杀业务链路。
+`High_concurrency_seckill` 是一个基于 Spring Boot 构建的高并发秒杀系统后端项目。项目围绕用户认证、商品查询、秒杀商品缓存、Redis 库存预热、Lua 原子化秒杀、RabbitMQ 异步下单、MySQL 最终落库、死信队列补偿和 Docker 化部署，构建了一条较完整的电商秒杀业务链路。
 
 本项目面向电商大促、限时抢购、热点商品秒杀等典型高并发场景，重点解决瞬时流量冲击下的库存超卖、重复下单、数据库连接池被打满、缓存穿透、消息投递失败和订单最终一致性等问题。系统可以作为高并发秒杀业务、分布式缓存、消息队列削峰、异步下单和后端工程化部署能力的学习与实践项目。
 
@@ -20,9 +20,9 @@
 - 秒杀商品不存在时写入短期空缓存，缓解缓存穿透
 - 秒杀商品缓存随机过期，降低缓存雪崩风险
 - 项目启动时将秒杀库存预热到 Redis
-- Redis Lua 脚本原子扣减秒杀库存
-- Redisson 分布式锁控制同一用户重复请求
-- Redis Set 记录用户是否已参与秒杀，实现一人一单控制
+- Redis Lua 脚本原子化秒杀：校验活动时间段、一人一单查重、扣减库存、占位
+- Redis Set 记录已参与用户，配合 Lua 原子查重实现一人一单控制
+- Redis 建立订单预占状态，为后续对账提供可追溯依据
 - RabbitMQ 异步创建秒杀订单，实现流量削峰
 - RabbitMQ publisher confirm 与 return callback
 - 消息发送失败后的 Redis 库存与下单记录补偿
@@ -44,7 +44,6 @@
 | ORM 框架 | MyBatis-Plus 3.5.15         |
 | 数据库   | MySQL 8.0                   |
 | 缓存     | Redis 6                     |
-| 分布式锁 | Redisson                    |
 | 消息队列 | RabbitMQ                    |
 | 用户认证 | JWT + Redis                 |
 | 密码加密 | BCrypt                      |
@@ -67,14 +66,15 @@ Controller Layer
         v
 Service Layer
         |
-        +--------------------+--------------------+--------------------+
-        |                    |                    |                    |
-        v                    v                    v                    v
-MySQL / MyBatis-Plus      Redis / Lua        Redisson Lock        RabbitMQ
-        |                    |                    |                    |
-        v                    v                    v                    v
-Goods / SeckillGoods    Stock / Token      Duplicate Guard     Async Order
-Order / User            Cache / OrderedSet                      DLQ Compensation
+        +--------------------+--------------------+
+        |                    |                    |
+        v                    v                    v
+MySQL / MyBatis-Plus      Redis / Lua        RabbitMQ
+        |                    |                    |
+        v                    v                    v
+Goods / SeckillGoods    Stock / Token      Async Order
+Order / User            Cache / OrderedSet  DLQ Compensation
+                        Preoccupy Status
 ```
 
 主包路径为：
@@ -143,27 +143,23 @@ MySQL 条件更新扣减库存：stock >= quantity
 ### 秒杀下单流程
 
 ```text
-项目启动时预热秒杀库存到 Redis
+项目启动时预热秒杀库存与活动时间段到 Redis
         ↓
 用户请求秒杀接口
         ↓
-校验秒杀商品是否存在以及是否在活动时间内
+从 Redis 读取活动时间段（不访问 MySQL）
         ↓
-基于 userId + seckillGoodsId 获取 Redisson 分布式锁
+生成秒杀订单号（雪花算法）
         ↓
-检查 Redis Set 中用户是否已经参与过该秒杀
-        ↓
-执行 Redis Lua 脚本原子扣减库存
-        ↓
-生成秒杀订单号
+执行单个 Lua 脚本原子完成：校验时间段 + 一人一单查重 + 扣减库存 + 占位 + 建立订单预占状态
         ↓
 发送秒杀订单消息到 RabbitMQ
-        ↓
-将用户写入 Redis 已下单 Set
         ↓
 接口快速返回订单号
         ↓
 RabbitMQ 消费端异步创建订单并扣减 MySQL 秒杀库存
+        ↓
+消费成功并提交事务后清除订单预占状态
         ↓
 如果消费失败，消息重试；重试耗尽后进入死信队列并执行 Redis 补偿
 ```
@@ -172,9 +168,9 @@ RabbitMQ 消费端异步创建订单并扣减 MySQL 秒杀库存
 
 ## 秒杀一致性设计
 
-### Redis Lua 原子扣减库存
+### Redis Lua 原子化秒杀
 
-秒杀库存以 `seckill:stock:{seckillGoodsId}` 的形式存储在 Redis 中。秒杀请求进入后，通过 Lua 脚本完成库存读取、库存判断和库存扣减，保证单个 Redis 节点内操作的原子性。
+秒杀库存以 `seckill:stock:{seckillGoodsId}:{startTime}` 的形式存储在 Redis 中（`startTime` 作为活动版本标识），活动时间段预热到 `seckill:activity:{seckillGoodsId}`。秒杀请求进入后，通过单个 Lua 脚本原子完成「校验时间段 + 一人一单查重 + 扣减库存 + 占位 + 建立订单预占状态」，保证整个关键路径的原子性。
 
 脚本返回值含义：
 
@@ -184,13 +180,15 @@ RabbitMQ 消费端异步创建订单并扣减 MySQL 秒杀库存
 | `-1`   | 库存不足                   |
 | `-2`   | 库存未初始化               |
 | `-3`   | 库存数据异常               |
+| `-4`   | 已参与过该秒杀             |
+| `-5`   | 不在秒杀时间段内           |
 
 ### 一人一单控制
 
 系统使用两层机制限制重复秒杀：
 
-1. 使用 Redisson 分布式锁 `seckill:lock:{userId}:{seckillGoodsId}`，避免同一用户对同一秒杀商品的短时间并发重复请求。
-2. 使用 Redis Set `seckill:ordered:{seckillGoodsId}` 记录已参与用户，避免同一用户重复下单。
+1. 秒杀入口的单个 Lua 脚本内先 `SISMEMBER` 查重、后 `SADD` 占位，查重与占位在同一原子操作内完成，避免同一用户重复下单。
+2. Redis Set `seckill:ordered:{seckillGoodsId}:{startTime}` 记录已参与用户。
 
 同时，数据库 `order` 表中设置了唯一索引：
 
@@ -596,9 +594,9 @@ seckill
 
 秒杀接口只完成资格校验、库存预扣和消息投递，然后快速返回订单号。真正的订单创建由 RabbitMQ 消费端异步完成，从而削平瞬时流量峰值，降低数据库写入压力。
 
-### 分布式锁与一人一单控制
+### 原子化秒杀与一人一单控制
 
-Redisson 分布式锁用于约束同一用户对同一秒杀商品的并发请求，Redis Set 用于记录用户参与状态，数据库唯一索引用于最终兜底。三层控制共同降低重复下单风险。
+秒杀入口通过单个 Redis Lua 脚本原子完成「校验时间段 + 一人一单查重 + 扣减库存 + 占位」，Redis Set 记录用户参与状态，数据库唯一索引最终兜底。查重与占位在同一原子操作内，共同降低重复下单风险。
 
 ### 消息可靠性与补偿机制
 

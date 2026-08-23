@@ -25,11 +25,6 @@ spring:
     publisher-returns: true
     template:
       mandatory: true
-  redisson:
-    config: |
-      singleServerConfig:
-        address: "redis://${REDIS_HOST:redis}:${REDIS_PORT:6379}"
-        database: 0
 mybatis-plus:
   configuration:
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
