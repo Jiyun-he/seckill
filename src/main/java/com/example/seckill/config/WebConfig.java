@@ -45,6 +45,6 @@ public class WebConfig implements WebMvcConfigurer {
                 // 拦截所有
                 .addPathPatterns("/**")
                 // 排除登录注册、API文档、Actuator等
-                .excludePathPatterns("/user/login", "/user/register", "/hello", "/doc.html", "/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**", "/webjars/**", "/actuator/**");
+                .excludePathPatterns("/user/login", "/user/register", "/hello", "/doc.html", "/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**", "/webjars/**", "/actuator/**", "/fault/**");
     }
 }

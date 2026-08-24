@@ -83,6 +83,8 @@ public class RabbitMqConfig {
         factory.setConnectionFactory(connectionFactory);
         factory.setMessageConverter(new Jackson2JsonMessageConverter());
         factory.setAdviceChain(retryInterceptor);
+        // 多消费者并发，用于故障注入验证 check-then-act 并发窗口
+        factory.setConcurrentConsumers(2);
         return factory;
     }
 

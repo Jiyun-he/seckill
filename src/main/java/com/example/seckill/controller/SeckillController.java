@@ -4,6 +4,7 @@ import com.example.seckill.common.BusinessException;
 import com.example.seckill.common.Result;
 import com.example.seckill.service.SeckillService;
 import com.example.seckill.vo.SeckillGoodsVO;
+import com.example.seckill.vo.SeckillOrderStatusVO;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -52,5 +53,15 @@ public class SeckillController {
         }
         Long orderNo = seckillService.seckill(userId, seckillGoodsId);
         return Result.success(orderNo);
+    }
+
+    @GetMapping("/order/{orderNo}")
+    @Operation(
+            summary = "查询秒杀订单状态",
+            description = "返回 PROCESSING（处理中）、SUCCESS（成功）、FAILED（失败）、NOT_FOUND（不存在）"
+    )
+    public Result<SeckillOrderStatusVO> getOrderStatus(
+            @Parameter(description = "订单号", required = true) @PathVariable Long orderNo) {
+        return Result.success(seckillService.getSeckillOrderStatus(orderNo));
     }
 }

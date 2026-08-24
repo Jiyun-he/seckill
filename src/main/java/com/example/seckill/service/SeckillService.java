@@ -3,6 +3,7 @@ package com.example.seckill.service;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.example.seckill.entity.SeckillGoods;
 import com.example.seckill.vo.SeckillGoodsVO;
+import com.example.seckill.vo.SeckillOrderStatusVO;
 
 /**
  * 秒杀服务接口。
@@ -39,4 +40,12 @@ public interface SeckillService extends IService<SeckillGoods> {
      * @return 秒杀商品详情 VO；商品不存在时返回 null
      */
     SeckillGoodsVO getSeckillGoodsDetail(Long id);
+
+    /**
+     * 查询秒杀订单异步状态：优先读 Redis 预占状态，未命中时兜底查数据库订单。
+     *
+     * @param orderNo 订单号
+     * @return 订单状态（PROCESSING / SUCCESS / FAILED / NOT_FOUND）
+     */
+    SeckillOrderStatusVO getSeckillOrderStatus(Long orderNo);
 }

@@ -1,13 +1,20 @@
 package com.example.seckill.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.example.seckill.common.BusinessException;
+import com.example.seckill.common.SeckillOrderStatus;
 import com.example.seckill.config.RabbitMqConfig;
 import com.example.seckill.converter.SeckillGoodsConverter;
+import com.example.seckill.entity.Order;
 import com.example.seckill.entity.SeckillGoods;
+import com.example.seckill.fault.FailpointService;
+import com.example.seckill.fault.Failpoints;
+import com.example.seckill.mapper.OrderMapper;
 import com.example.seckill.mapper.SeckillGoodsMapper;
 import com.example.seckill.service.SeckillService;
 import com.example.seckill.vo.SeckillGoodsVO;
+import com.example.seckill.vo.SeckillOrderStatusVO;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -51,6 +58,10 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
     private RabbitTemplate rabbitTemplate;
     @Autowired
     private SnowflakeIdUtil snowflakeIdUtil;
+    @Autowired
+    private FailpointService failpointService;
+    @Autowired
+    private OrderMapper orderMapper;
 
     private static final String SECKILL_STOCK_KEY = "seckill:stock:";
     private static final String SECKILL_GOODS_CACHE_KEY = "seckill:goods:";
@@ -100,8 +111,8 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
                 "end\n" +
                 "local after = redis.call('decr', KEYS[1])\n" +
                 "redis.call('sadd', KEYS[2], ARGV[1])\n" +
-                // 预占状态 TTL 3600s，正常由 MQ 落库成功后删除；超时残留由后续对账任务兜底
-                "redis.call('set', KEYS[3], 'PROCESSING', 'EX', 3600)\n" +
+                // 预占状态 PENDING TTL 3600s，后续流转 CONFIRMED/RETRY/FAILED/CONSUMED；超时残留由对账框架兜底
+                "redis.call('set', KEYS[3], 'PENDING', 'EX', 3600)\n" +
                 "return after\n"
         );
         SECKILL_LUA = seckillScript;
@@ -109,9 +120,13 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
         DefaultRedisScript<Long> compensateScript = new DefaultRedisScript<>();
         compensateScript.setResultType(Long.class);
         compensateScript.setScriptText(
+                "local status = redis.call('get', KEYS[3])\n" +
+                "if status == 'FAILED' or status == 'CONSUMED' then\n" +
+                "  return 0\n" +
+                "end\n" +
                 "redis.call('incr', KEYS[1])\n" +
                 "redis.call('srem', KEYS[2], ARGV[1])\n" +
-                "redis.call('del', KEYS[3])\n" +
+                "redis.call('set', KEYS[3], 'FAILED', 'EX', 86400)\n" +
                 "return 1\n"
         );
         COMPENSATE_LUA = compensateScript;
@@ -245,6 +260,7 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
         // code >= 0：扣减成功，剩余库存
 
         // 5. 扣减与占位成功，异步发 MQ 落库
+        failpointService.block(Failpoints.PREOCCUPY_AFTER);
         sendSeckillOrderMessage(userId, seckillGoodsId, startTimeStr, orderNo);
         log.info("秒杀成功，生成订单号：{}，用户：{}", orderNo, userId);
         return orderNo;
@@ -268,17 +284,31 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
         String userIdStr = userId.toString();
 
         CorrelationData correlationData = new CorrelationData(orderNo.toString());
-        correlationData.getFuture().thenAccept(confirm -> {
-            if (!confirm.isAck()) {
-                // confirm 未 ack，直接补偿；真正的重试由后续的消息状态 + 定时 retry job 完成
+
+        // confirm 回调只更新状态：return 或 nack（明确失败）→ 即时幂等补偿；超时/结果未知 → RETRY；ack → CONFIRMED
+        correlationData.getFuture().whenComplete((confirm, ex) -> {
+            if (correlationData.getReturned() != null) {
+                // 消息无法路由被退回（明确失败）
                 compensateRedis(stockKey, orderedKey, orderKey, userIdStr);
-                log.warn("订单 {} MQ confirm 未 ack，已补偿 Redis", orderNo);
+                log.warn("订单 {} 消息无法路由，已补偿 Redis", orderNo);
+            } else if (ex != null) {
+                stringRedisTemplate.opsForValue().set(orderKey, SeckillOrderStatus.RETRY.name(),
+                        SeckillOrderStatus.INTERMEDIATE_TTL_SECONDS, TimeUnit.SECONDS);
+                log.warn("订单 {} confirm 超时/异常，标记 RETRY 等待对账", orderNo);
+            } else if (confirm.isAck()) {
+                stringRedisTemplate.opsForValue().set(orderKey, SeckillOrderStatus.CONFIRMED.name(),
+                        SeckillOrderStatus.INTERMEDIATE_TTL_SECONDS, TimeUnit.SECONDS);
+            } else {
+                compensateRedis(stockKey, orderedKey, orderKey, userIdStr);
+                log.warn("订单 {} confirm nack，已补偿 Redis", orderNo);
             }
         });
 
         try {
             rabbitTemplate.convertAndSend(RabbitMqConfig.SECKILL_EXCHANGE,
                     RabbitMqConfig.SECKILL_ROUTING_KEY, msg, correlationData);
+            failpointService.block(Failpoints.PUBLISH_AFTER);
+            failpointService.throwIfEnabled(Failpoints.PUBLISH_AFTER);
         } catch (Exception e) {
             compensateRedis(stockKey, orderedKey, orderKey, userIdStr);
             throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR, "消息发送失败", e);
@@ -288,5 +318,22 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
     private void compensateRedis(String stockKey, String orderedKey, String orderKey, String userIdStr) {
         stringRedisTemplate.execute(COMPENSATE_LUA,
                 Arrays.asList(stockKey, orderedKey, orderKey), userIdStr);
+    }
+
+    @Override
+    public SeckillOrderStatusVO getSeckillOrderStatus(Long orderNo) {
+        String value = stringRedisTemplate.opsForValue().get(SECKILL_ORDER_PREOCCUPY_KEY + orderNo);
+        SeckillOrderStatus status;
+        if (value != null) {
+            status = SeckillOrderStatus.valueOf(value).toUserVisible();
+        } else {
+            // Redis 状态已过期或从未写入，兜底查数据库订单是否已落库
+            Long count = orderMapper.selectCount(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
+            status = count != null && count > 0 ? SeckillOrderStatus.CONSUMED : SeckillOrderStatus.NOT_FOUND;
+        }
+        SeckillOrderStatusVO vo = new SeckillOrderStatusVO();
+        vo.setOrderNo(orderNo);
+        vo.setStatus(status);
+        return vo;
     }
 }
