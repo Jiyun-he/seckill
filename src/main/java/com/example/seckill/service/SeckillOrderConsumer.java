@@ -11,6 +11,7 @@ import com.example.seckill.fault.Failpoints;
 import com.example.seckill.mapper.OrderMapper;
 import com.example.seckill.config.RabbitMqConfig;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -47,6 +48,7 @@ public class SeckillOrderConsumer {
     private FailpointService failpointService;
 
     private static final RedisScript<Long> COMPENSATE_LUA;
+    private static final RedisScript<Long> CALIBRATE_LUA;
 
     static {
         DefaultRedisScript<Long> script = new DefaultRedisScript<>();
@@ -62,6 +64,16 @@ public class SeckillOrderConsumer {
                 "return 1\n"
         );
         COMPENSATE_LUA = script;
+
+        DefaultRedisScript<Long> calibrateScript = new DefaultRedisScript<>();
+        calibrateScript.setResultType(Long.class);
+        calibrateScript.setScriptText(
+                "redis.call('set', KEYS[1], ARGV[2])\n" +
+                "redis.call('srem', KEYS[2], ARGV[1])\n" +
+                "redis.call('set', KEYS[3], 'FAILED', 'EX', 86400)\n" +
+                "return 1\n"
+        );
+        CALIBRATE_LUA = calibrateScript;
     }
 
     /**
@@ -78,6 +90,7 @@ public class SeckillOrderConsumer {
         Long userId = Long.valueOf(msg.get("userId").toString());
         Long seckillGoodsId = Long.valueOf(msg.get("seckillGoodsId").toString());
         Long orderNo = ((Number) msg.get("orderNo")).longValue();
+        String startTime = (String) msg.get("startTime");
 
         // 幂等性检查
         Long count = orderMapper.selectCount(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
@@ -112,7 +125,9 @@ public class SeckillOrderConsumer {
                 .ge(SeckillGoods::getSeckillStock, 1)
                 .setSql("seckill_stock = seckill_stock - 1"));
         if (!updated) {
-            throw new RuntimeException("库存不足");
+            // 业务失败：DB 库存不足（Redis/DB 漂移），就地校准而非 incr，避免制造假库存
+            calibrateRedisStock(seckillGoodsId, startTime, userId, orderNo);
+            throw new AmqpRejectAndDontRequeueException("库存不足，已校准 Redis");
         }
 
         // 事务提交成功后清除订单预占状态；超时残留由后续对账任务兜底
@@ -125,6 +140,20 @@ public class SeckillOrderConsumer {
                 failpointService.block(Failpoints.COMMIT_AFTER);
             }
         });
+    }
+
+    /**
+     * 业务失败校准：DB 库存不足说明 Redis 与 DB 已漂移，将 Redis 库存同步为 DB 真实值，
+     * 释放占位并标记失败，避免继续 incr 制造假库存。
+     */
+    private void calibrateRedisStock(Long seckillGoodsId, String startTime, Long userId, Long orderNo) {
+        SeckillGoods latest = seckillGoodsService.getById(seckillGoodsId);
+        int dbStock = latest != null ? latest.getSeckillStock() : 0;
+        stringRedisTemplate.execute(CALIBRATE_LUA,
+                Arrays.asList("seckill:stock:" + seckillGoodsId + ":" + startTime,
+                              "seckill:ordered:" + seckillGoodsId + ":" + startTime,
+                              "seckill:order:" + orderNo),
+                userId.toString(), String.valueOf(dbStock));
     }
 
     /**
