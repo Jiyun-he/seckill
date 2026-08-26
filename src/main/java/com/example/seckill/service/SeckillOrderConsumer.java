@@ -54,13 +54,14 @@ public class SeckillOrderConsumer {
         DefaultRedisScript<Long> script = new DefaultRedisScript<>();
         script.setResultType(Long.class);
         script.setScriptText(
-                "local status = redis.call('get', KEYS[3])\n" +
+                "local status = redis.call('hget', KEYS[3], 'status')\n" +
                 "if status == 'FAILED' or status == 'CONSUMED' then\n" +
                 "  return 0\n" +
                 "end\n" +
                 "redis.call('incr', KEYS[1])\n" +
                 "redis.call('srem', KEYS[2], ARGV[1])\n" +
-                "redis.call('set', KEYS[3], 'FAILED', 'EX', 86400)\n" +
+                "redis.call('hset', KEYS[3], 'status', 'FAILED', 'updatedAt', ARGV[2])\n" +
+                "redis.call('expire', KEYS[3], 86400)\n" +
                 "return 1\n"
         );
         COMPENSATE_LUA = script;
@@ -70,7 +71,8 @@ public class SeckillOrderConsumer {
         calibrateScript.setScriptText(
                 "redis.call('set', KEYS[1], ARGV[2])\n" +
                 "redis.call('srem', KEYS[2], ARGV[1])\n" +
-                "redis.call('set', KEYS[3], 'FAILED', 'EX', 86400)\n" +
+                "redis.call('hset', KEYS[3], 'status', 'FAILED', 'updatedAt', ARGV[3])\n" +
+                "redis.call('expire', KEYS[3], 86400)\n" +
                 "return 1\n"
         );
         CALIBRATE_LUA = calibrateScript;
@@ -91,6 +93,15 @@ public class SeckillOrderConsumer {
         Long seckillGoodsId = Long.valueOf(msg.get("seckillGoodsId").toString());
         Long orderNo = ((Number) msg.get("orderNo")).longValue();
         String startTime = (String) msg.get("startTime");
+
+        // 终态检查：已补偿(FAILED)或已成功(CONSUMED)的交易禁止消费复活，直接幂等 ACK
+        Object statusObj = stringRedisTemplate.opsForHash().get("seckill:order:" + orderNo, "status");
+        if (statusObj != null) {
+            SeckillOrderStatus status = SeckillOrderStatus.valueOf(statusObj.toString());
+            if (status == SeckillOrderStatus.FAILED || status == SeckillOrderStatus.CONSUMED) {
+                return;
+            }
+        }
 
         // 幂等性检查
         Long count = orderMapper.selectCount(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
@@ -134,9 +145,9 @@ public class SeckillOrderConsumer {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                stringRedisTemplate.opsForValue().set("seckill:order:" + orderNo,
-                        SeckillOrderStatus.CONSUMED.name(),
-                        SeckillOrderStatus.FINAL_TTL_SECONDS, TimeUnit.SECONDS);
+                stringRedisTemplate.opsForHash().put("seckill:order:" + orderNo, "status", SeckillOrderStatus.CONSUMED.name());
+                stringRedisTemplate.opsForHash().put("seckill:order:" + orderNo, "updatedAt", String.valueOf(System.currentTimeMillis()));
+                stringRedisTemplate.expire("seckill:order:" + orderNo, SeckillOrderStatus.FINAL_TTL_SECONDS, TimeUnit.SECONDS);
                 failpointService.block(Failpoints.COMMIT_AFTER);
             }
         });
@@ -153,7 +164,7 @@ public class SeckillOrderConsumer {
                 Arrays.asList("seckill:stock:" + seckillGoodsId + ":" + startTime,
                               "seckill:ordered:" + seckillGoodsId + ":" + startTime,
                               "seckill:order:" + orderNo),
-                userId.toString(), String.valueOf(dbStock));
+                userId.toString(), String.valueOf(dbStock), String.valueOf(System.currentTimeMillis()));
     }
 
     /**
@@ -175,7 +186,7 @@ public class SeckillOrderConsumer {
                 Arrays.asList("seckill:stock:" + seckillGoodsId + ":" + startTime,
                               "seckill:ordered:" + seckillGoodsId + ":" + startTime,
                               "seckill:order:" + orderNo),
-                userId.toString());
+                userId.toString(), String.valueOf(System.currentTimeMillis()));
         failpointService.block(Failpoints.COMPENSATE_AFTER);
     }
 }

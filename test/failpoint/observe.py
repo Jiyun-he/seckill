@@ -37,6 +37,10 @@ def observe_redis():
             t = r.type(k)
             if t == "set":
                 val = sorted(r.smembers(k))
+            elif t == "hash":
+                val = r.hgetall(k)
+                ttl = r.ttl(k)
+                val = f"{val} (ttl={ttl}s)"
             else:
                 val = r.get(k)
                 ttl = r.ttl(k)

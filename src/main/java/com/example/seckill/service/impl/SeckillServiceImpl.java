@@ -111,8 +111,9 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
                 "end\n" +
                 "local after = redis.call('decr', KEYS[1])\n" +
                 "redis.call('sadd', KEYS[2], ARGV[1])\n" +
-                // 预占状态 PENDING TTL 3600s，后续流转 CONFIRMED/RETRY/FAILED/CONSUMED；超时残留由对账框架兜底
-                "redis.call('set', KEYS[3], 'PENDING', 'EX', 3600)\n" +
+                // 预占状态 Hash：status/userId/seckillGoodsId/startTime/updatedAt/retryCount；TTL 3600s，超时由对账框架兜底
+                "redis.call('hset', KEYS[3], 'status', 'PENDING', 'userId', ARGV[1], 'seckillGoodsId', ARGV[6], 'startTime', ARGV[7], 'updatedAt', ARGV[3], 'retryCount', '0')\n" +
+                "redis.call('expire', KEYS[3], 3600)\n" +
                 "return after\n"
         );
         SECKILL_LUA = seckillScript;
@@ -120,13 +121,14 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
         DefaultRedisScript<Long> compensateScript = new DefaultRedisScript<>();
         compensateScript.setResultType(Long.class);
         compensateScript.setScriptText(
-                "local status = redis.call('get', KEYS[3])\n" +
+                "local status = redis.call('hget', KEYS[3], 'status')\n" +
                 "if status == 'FAILED' or status == 'CONSUMED' then\n" +
                 "  return 0\n" +
                 "end\n" +
                 "redis.call('incr', KEYS[1])\n" +
                 "redis.call('srem', KEYS[2], ARGV[1])\n" +
-                "redis.call('set', KEYS[3], 'FAILED', 'EX', 86400)\n" +
+                "redis.call('hset', KEYS[3], 'status', 'FAILED', 'updatedAt', ARGV[2])\n" +
+                "redis.call('expire', KEYS[3], 86400)\n" +
                 "return 1\n"
         );
         COMPENSATE_LUA = compensateScript;
@@ -236,7 +238,8 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
                 Arrays.asList(stockKey, orderedKey, orderKey),
                 userId.toString(), orderNo.toString(),
                 String.valueOf(System.currentTimeMillis()),
-                String.valueOf(startMillis), String.valueOf(endMillis));
+                String.valueOf(startMillis), String.valueOf(endMillis),
+                seckillGoodsId.toString(), startTimeStr);
 
         if (result == null) {
             throw new BusinessException(HttpStatus.TOO_MANY_REQUESTS, "系统繁忙");
@@ -292,12 +295,10 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
                 compensateRedis(stockKey, orderedKey, orderKey, userIdStr);
                 log.warn("订单 {} 消息无法路由，已补偿 Redis", orderNo);
             } else if (ex != null) {
-                stringRedisTemplate.opsForValue().set(orderKey, SeckillOrderStatus.RETRY.name(),
-                        SeckillOrderStatus.INTERMEDIATE_TTL_SECONDS, TimeUnit.SECONDS);
+                updateOrderStatus(orderKey, SeckillOrderStatus.RETRY, SeckillOrderStatus.INTERMEDIATE_TTL_SECONDS);
                 log.warn("订单 {} confirm 超时/异常，标记 RETRY 等待对账", orderNo);
             } else if (confirm.isAck()) {
-                stringRedisTemplate.opsForValue().set(orderKey, SeckillOrderStatus.CONFIRMED.name(),
-                        SeckillOrderStatus.INTERMEDIATE_TTL_SECONDS, TimeUnit.SECONDS);
+                updateOrderStatus(orderKey, SeckillOrderStatus.CONFIRMED, SeckillOrderStatus.INTERMEDIATE_TTL_SECONDS);
             } else {
                 compensateRedis(stockKey, orderedKey, orderKey, userIdStr);
                 log.warn("订单 {} confirm nack，已补偿 Redis", orderNo);
@@ -307,25 +308,34 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
         try {
             rabbitTemplate.convertAndSend(RabbitMqConfig.SECKILL_EXCHANGE,
                     RabbitMqConfig.SECKILL_ROUTING_KEY, msg, correlationData);
-            failpointService.block(Failpoints.PUBLISH_AFTER);
-            failpointService.throwIfEnabled(Failpoints.PUBLISH_AFTER);
         } catch (Exception e) {
+            // 同步异常：消息未发出（连接断等），明确失败，补偿
             compensateRedis(stockKey, orderedKey, orderKey, userIdStr);
             throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR, "消息发送失败", e);
         }
+        // 消息已发出，此后的 fault 埋点（BLOCK/THROW）模拟 crash/异常，结果未知，交由 confirm 回调 + 对账框架收敛
+        failpointService.block(Failpoints.PUBLISH_AFTER);
+        failpointService.throwIfEnabled(Failpoints.PUBLISH_AFTER);
     }
 
     private void compensateRedis(String stockKey, String orderedKey, String orderKey, String userIdStr) {
         stringRedisTemplate.execute(COMPENSATE_LUA,
-                Arrays.asList(stockKey, orderedKey, orderKey), userIdStr);
+                Arrays.asList(stockKey, orderedKey, orderKey),
+                userIdStr, String.valueOf(System.currentTimeMillis()));
+    }
+
+    private void updateOrderStatus(String orderKey, SeckillOrderStatus status, long ttlSeconds) {
+        stringRedisTemplate.opsForHash().put(orderKey, "status", status.name());
+        stringRedisTemplate.opsForHash().put(orderKey, "updatedAt", String.valueOf(System.currentTimeMillis()));
+        stringRedisTemplate.expire(orderKey, ttlSeconds, TimeUnit.SECONDS);
     }
 
     @Override
     public SeckillOrderStatusVO getSeckillOrderStatus(Long orderNo) {
-        String value = stringRedisTemplate.opsForValue().get(SECKILL_ORDER_PREOCCUPY_KEY + orderNo);
+        Object statusObj = stringRedisTemplate.opsForHash().get(SECKILL_ORDER_PREOCCUPY_KEY + orderNo, "status");
         SeckillOrderStatus status;
-        if (value != null) {
-            status = SeckillOrderStatus.valueOf(value).toUserVisible();
+        if (statusObj != null) {
+            status = SeckillOrderStatus.valueOf(statusObj.toString()).toUserVisible();
         } else {
             // Redis 状态已过期或从未写入，兜底查数据库订单是否已落库
             Long count = orderMapper.selectCount(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
@@ -335,5 +345,10 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
         vo.setOrderNo(orderNo);
         vo.setStatus(status);
         return vo;
+    }
+
+    @Override
+    public void resendSeckillOrder(Long userId, Long seckillGoodsId, String startTime, Long orderNo) {
+        sendSeckillOrderMessage(userId, seckillGoodsId, startTime, orderNo);
     }
 }

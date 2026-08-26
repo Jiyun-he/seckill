@@ -48,4 +48,14 @@ public interface SeckillService extends IService<SeckillGoods> {
      * @return 订单状态（PROCESSING / SUCCESS / FAILED / NOT_FOUND）
      */
     SeckillOrderStatusVO getSeckillOrderStatus(Long orderNo);
+
+    /**
+     * 对账框架重投：重新发送秒杀订单消息（复用首次发送的 confirm 状态机）。
+     *
+     * @param userId         用户 ID
+     * @param seckillGoodsId 秒杀商品 ID
+     * @param startTime      活动版本（yyyyMMddHHmmss）
+     * @param orderNo        订单号
+     */
+    void resendSeckillOrder(Long userId, Long seckillGoodsId, String startTime, Long orderNo);
 }
