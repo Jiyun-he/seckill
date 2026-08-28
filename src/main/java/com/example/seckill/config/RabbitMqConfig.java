@@ -67,7 +67,7 @@ public class RabbitMqConfig {
 
     @Bean
     public MethodInterceptor retryInterceptor() {
-        return RetryInterceptorBuilder.stateful()
+        return RetryInterceptorBuilder.stateless()
                 .maxAttempts(3)
                 // 1s, 2s, 4s
                 .backOffOptions(1000, 2.0, 4000)
