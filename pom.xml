@@ -28,6 +28,8 @@
     </scm>
     <properties>
         <java.version>17</java.version>
+        <!-- Testcontainers 2.x 内置 docker-java 3.5+，支持 Docker Desktop 4.x 的 npipe 重定向协议 -->
+        <testcontainers.version>2.0.4</testcontainers.version>
     </properties>
     <dependencies>
         <dependency>
@@ -74,6 +76,21 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-mysql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-rabbitmq</artifactId>
             <scope>test</scope>
         </dependency>
 <!--        <dependency>-->
