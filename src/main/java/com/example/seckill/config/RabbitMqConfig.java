@@ -9,6 +9,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.retry.RejectAndDontRequeueRecoverer;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.aopalliance.intercept.MethodInterceptor;
@@ -78,13 +79,14 @@ public class RabbitMqConfig {
 
     @Bean
     public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
-            ConnectionFactory connectionFactory, MethodInterceptor retryInterceptor) {
+            ConnectionFactory connectionFactory, MethodInterceptor retryInterceptor,
+            @Value("${seckill.consumer.concurrency:2}") int consumerConcurrency) {
         SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
         factory.setConnectionFactory(connectionFactory);
         factory.setMessageConverter(new Jackson2JsonMessageConverter());
         factory.setAdviceChain(retryInterceptor);
-        // 多消费者并发，用于故障注入验证 check-then-act 并发窗口
-        factory.setConcurrentConsumers(2);
+        // 消费者并发度由环境变量 SEKKILL_CONSUMER_CONCURRENCY 控制（默认 2），用于容量扩展实验
+        factory.setConcurrentConsumers(consumerConcurrency);
         return factory;
     }
 
