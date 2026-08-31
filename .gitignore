@@ -33,3 +33,12 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### 压测产物 ###
+test/*.jtl
+test/*.log
+test/monitor_perf*.csv
+test/single_user.csv
+test/_gen_single.py
+test/users.csv
+jmeter.log
