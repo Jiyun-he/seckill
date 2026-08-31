@@ -84,6 +84,8 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
     private static final long RETURN_STOCK_EMPTY = -1L;
     private static final RedisScript<Long> SECKILL_LUA;
     private static final RedisScript<Long> COMPENSATE_LUA;
+    /** 中间态状态转移（原子 CAS）：终态 FAILED/CONSUMED 具有更高权威，晚到的 MQ 回调不得覆盖 */
+    private static final RedisScript<Long> UPDATE_STATUS_LUA;
 
     static {
         DefaultRedisScript<Long> seckillScript = new DefaultRedisScript<>();
@@ -132,6 +134,19 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
                 "return 1\n"
         );
         COMPENSATE_LUA = compensateScript;
+
+        DefaultRedisScript<Long> updateStatusScript = new DefaultRedisScript<>();
+        updateStatusScript.setResultType(Long.class);
+        updateStatusScript.setScriptText(
+                "local status = redis.call('hget', KEYS[1], 'status')\n" +
+                "if status == 'FAILED' or status == 'CONSUMED' then\n" +
+                "  return 0\n" +
+                "end\n" +
+                "redis.call('hset', KEYS[1], 'status', ARGV[1], 'updatedAt', ARGV[2])\n" +
+                "redis.call('expire', KEYS[1], ARGV[3])\n" +
+                "return 1\n"
+        );
+        UPDATE_STATUS_LUA = updateStatusScript;
     }
 
     /**
@@ -325,9 +340,10 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
     }
 
     private void updateOrderStatus(String orderKey, SeckillOrderStatus status, long ttlSeconds) {
-        stringRedisTemplate.opsForHash().put(orderKey, "status", status.name());
-        stringRedisTemplate.opsForHash().put(orderKey, "updatedAt", String.valueOf(System.currentTimeMillis()));
-        stringRedisTemplate.expire(orderKey, ttlSeconds, TimeUnit.SECONDS);
+        // 原子 CAS：终态（FAILED/CONSUMED）具有更高权威，晚到的 MQ 回调（ack/超时）不得覆盖
+        stringRedisTemplate.execute(UPDATE_STATUS_LUA,
+                Arrays.asList(orderKey),
+                status.name(), String.valueOf(System.currentTimeMillis()), String.valueOf(ttlSeconds));
     }
 
     @Override
