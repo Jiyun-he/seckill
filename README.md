@@ -22,24 +22,28 @@
 - 项目启动时将秒杀库存预热到 Redis
 - Redis Lua 脚本原子化秒杀：校验活动时间段、一人一单查重、扣减库存、占位
 - Redis Set 记录已参与用户，配合 Lua 原子查重实现一人一单控制
-- Redis 建立订单预占状态，为后续对账提供可追溯依据
+- Redis 建立订单预占状态（Hash：status/userId/seckillGoodsId/startTime/updatedAt/retryCount）
+- 秒杀订单状态机：PENDING → CONFIRMED → CONSUMED / RETRY / FAILED
+- 订单状态查询接口（GET /seckill/order/{orderNo}）
+- 异常交易对账 Scanner：扫描悬挂中间态，按 DB 权威重投/补偿 + 库存对账
 - RabbitMQ 异步创建秒杀订单，实现流量削峰
 - RabbitMQ publisher confirm 与 return callback
-- 消息发送失败后的 Redis 库存与下单记录补偿
+- 消息投递幂等补偿 + 业务失败库存校准
 - RabbitMQ 消费端重试与死信队列
-- 消费端订单幂等性校验
+- 消费端订单幂等性校验（终态检查 + DB 唯一键兜底）
 - MySQL 唯一索引兜底防止重复秒杀订单
 - MyBatis-Plus 分页与条件更新
 - 统一响应格式
 - 全局异常处理
 - Knife4j / OpenAPI 接口文档
 - Docker Compose 一键启动 MySQL、Redis、RabbitMQ 和后端服务
+- 故障注入测试框架（fault-test profile + failpoint 埋点，覆盖 B1-B7 失败窗口）
 
 ## 技术栈
 
 | 模块     | 技术                        |
 | -------- | --------------------------- |
-| 后端框架 | Spring Boot 4.0.5           |
+| 后端框架 | Spring Boot 3.5.3           |
 | Web 框架 | Spring Web MVC              |
 | ORM 框架 | MyBatis-Plus 3.5.15         |
 | 数据库   | MySQL 8.0                   |
@@ -159,9 +163,11 @@ MySQL 条件更新扣减库存：stock >= quantity
         ↓
 RabbitMQ 消费端异步创建订单并扣减 MySQL 秒杀库存
         ↓
-消费成功并提交事务后清除订单预占状态
+消费成功并提交事务后，订单状态置为 CONSUMED
         ↓
-如果消费失败，消息重试；重试耗尽后进入死信队列并执行 Redis 补偿
+如果消费失败，消息重试；重试耗尽后进入死信队列并执行幂等补偿
+        ↓
+confirm 结果未知（超时）→ 状态置为 RETRY，由对账 Scanner 兜底重投
 ```
 
 该流程将秒杀接口的关键路径控制在 Redis 和 MQ 层，避免所有请求同步访问 MySQL，从而降低数据库连接池饱和风险。
@@ -216,17 +222,36 @@ RabbitMQ 相关配置包括：
 | consumer retry      | 消费失败后最多重试 3 次 |
 | dead letter queue   | 重试耗尽后进入死信队列  |
 
-### Redis 补偿机制
+### 订单状态机
 
-当 MQ 投递失败、confirm 未 ack 或消息最终进入死信队列时，系统会执行补偿逻辑：
+预占状态 `seckill:order:{orderNo}` 为 Hash，字段 `status` 取值：
+
+| 状态 | 含义 |
+|------|------|
+| PENDING | 预占成功，消息发送中 |
+| CONFIRMED | confirm ack，消息已投递 Broker，等待消费落库 |
+| RETRY | confirm 超时/结果未知，待对账重投 |
+| FAILED | 最终失败（补偿完成） |
+| CONSUMED | 消费落库成功 |
+
+### Redis 补偿与校准机制
+
+补偿与校准都幂等（终态 FAILED/CONSUMED 检查跳过），区分两种失败：
+
+- **系统失败**（MQ 投递失败、confirm nack、死信）：`Redis 库存 +1` + 移除占位 + 置 FAILED。
+- **业务失败**（DB 库存耗尽，Redis/DB 漂移）：`Redis 库存校准为 DB 真实值`（而非 +1），避免制造假库存。
+
+### 异常交易对账 Scanner
+
+`SeckillReconciliationScanner` 定时扫描中间态（PENDING/CONFIRMED/RETRY）超时记录，以 MySQL 订单为最终事实：
 
 ```text
-Redis 秒杀库存 +1
-        ↓
-从 seckill:ordered:{seckillGoodsId} 中移除 userId
+扫描中间态超时
+  ├─ DB 有订单 → 修正为 CONSUMED（禁止补偿）
+  └─ DB 无订单 → retryCount < 3 ? 重投（retryCount+1） : 幂等补偿 → FAILED
 ```
 
-这样可以缓解 Redis 已扣库存但数据库订单未创建带来的状态不一致问题。
+另做轻量库存对账：期望 `Redis stock = DB stock - active reservations`，Redis 超出期望值（超卖侧）时按 DB 校准。
 
 ### 交易配置冻结
 
@@ -612,7 +637,30 @@ seckill
 
 ## 测试建议
 
-项目适合按以下顺序进行功能测试：
+### 自动化测试
+
+项目内置一套核心自动化回归测试（25 个用例），基于 Testcontainers 拉起隔离的 MySQL / Redis / RabbitMQ，覆盖秒杀业务核心不变量：
+
+| 测试类 | 覆盖内容 |
+|---|---|
+| `SeckillLuaTest` | Redis Lua 原子预占：正常 / 重复请求 / 库存 0 / 活动未开始 / 已结束 + 补偿幂等 |
+| `SeckillOrderConsumerTest` / `RollbackTest` | 消费落库、重复与并发重复消费、DB 库存不足漂移校准、下游异常整事务回滚 |
+| `SeckillReconciliationTest` | 对账收敛：DB 有单不补偿、悬挂重投、重试耗尽补偿、终态不处理、库存漂移校准 |
+| `HttpSemanticsTest` | HTTP 异常语义（404 / 409 / 500） |
+| `SnowflakeIdUtilTest` / `SeckillStockInitTest` | 雪花 ID 唯一性、活动库存初始化与僵尸库存清理 |
+
+运行方式（需 Docker Desktop 运行中，全部使用本地镜像，无需联网）：
+
+```bash
+./mvnw test                          # 全量
+./mvnw -Dtest=SeckillLuaTest test     # 单个测试类
+```
+
+此外，故障注入测试（B1~B7，见 `docs/failpoint/`）与 JMeter 压测（见 `docs/压测报告与面试问答.md`）作为补充，共同构成完整回归体系。
+
+### 手工功能测试
+
+项目也适合按以下顺序进行手工功能测试：
 
 1. 启动 Docker Compose，确认 MySQL、Redis、RabbitMQ 和 app 均为 healthy 或 running。
 2. 访问 `/hello`，确认后端服务正常。
@@ -631,13 +679,9 @@ seckill
 
 - 增加订单支付、取消和超时关闭流程
 - 引入延迟队列处理订单超时未支付
-- 使用雪花算法或号段模式生成订单号
 - 增加秒杀接口限流和用户级频控
-- 增加热点商品库存定时同步与校准任务
-- 增加 Redis 库存与 MySQL 库存一致性巡检
 - 引入 Sentinel 或 Redis Cluster 提升缓存高可用能力
-- 增加 JMeter 压测脚本和压测结果文档
-- 增加 Prometheus、Grafana 或 Spring Boot Actuator 监控
+- 引入 Prometheus、Grafana 监控
 - 增加管理员后台接口，用于维护商品和秒杀活动
 - 增加前端页面，完成完整秒杀业务闭环
 
