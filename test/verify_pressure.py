@@ -49,11 +49,11 @@ def wait_mq_empty(timeout=120):
 
 
 def wait_no_hanging(r, timeout=90):
-    """等高并发后订单状态收敛：无 PENDING/CONFIRMED/RETRY 中间态（对账 Scanner 30s 周期兜底）。"""
+    """等高并发后订单状态收敛：无 PENDING/CONFIRMED 中间态（对账 Scanner 30s 周期兜底）。"""
     deadline = time.time() + timeout
     while time.time() < deadline:
         hanging = [k for k in r.scan_iter(match="seckill:order:*", count=500)
-                   if r.hget(k, "status") in ("PENDING", "CONFIRMED", "RETRY")]
+                   if r.hget(k, "status") in ("PENDING", "CONFIRMED")]
         if not hanging:
             return True
         time.sleep(2)
@@ -113,9 +113,9 @@ def main():
     hanging = []
     for key in r.scan_iter(match="seckill:order:*", count=500):
         status = r.hget(key, "status")
-        if status in ("PENDING", "CONFIRMED", "RETRY"):
+        if status in ("PENDING", "CONFIRMED"):
             hanging.append((key, status))
-    record("无悬挂中间态 (PENDING/CONFIRMED/RETRY)", len(hanging) == 0,
+    record("无悬挂中间态 (PENDING/CONFIRMED)", len(hanging) == 0,
            "" if not hanging else f"（发现 {len(hanging)} 个：{hanging[:5]}）")
 
     # 假库存：Redis 库存 vs DB 库存

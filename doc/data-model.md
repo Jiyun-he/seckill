@@ -120,7 +120,7 @@ KEY idx_user_id (user_id)
 | `updatedAt` | 最近状态变更时间戳，对账超时判定依据 |
 | `retryCount` | 对账重投次数 |
 
-Hash 的 TTL 按状态分两档：中间态（PENDING / CONFIRMED / RETRY）保留 3600 秒，超时由对账框架接管；终态（FAILED / CONSUMED）保留 86400 秒，保证用户有足够的查询窗口。常量定义见 `SeckillOrderStatus#INTERMEDIATE_TTL_SECONDS` 与 `#FINAL_TTL_SECONDS`。
+Hash 的 TTL 按状态分两档：中间态（PENDING / CONFIRMED）保留 3600 秒，超时由对账框架接管；终态（FAILED / CONSUMED）保留 86400 秒，保证用户有足够的查询窗口。常量定义见 `SeckillOrderStatus#INTERMEDIATE_TTL_SECONDS` 与 `#FINAL_TTL_SECONDS`。
 
 `seckill:activity:{id}` 让秒杀入口在 Lua 内完成时间校验，热路径完全不需要访问 MySQL。
 

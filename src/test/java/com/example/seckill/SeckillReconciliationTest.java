@@ -89,7 +89,7 @@ class SeckillReconciliationTest extends AbstractIntegrationTest {
         long orderNo = 92003L;
         stringRedisTemplate.opsForValue().set(STOCK_KEY, "10");
         stringRedisTemplate.opsForSet().add(ORDERED_KEY, String.valueOf(USER_ID));
-        seedOrder(orderNo, "RETRY", STALE_UPDATED_AT, 3);
+        seedOrder(orderNo, "PENDING", STALE_UPDATED_AT, 3);
 
         scanner.scanReconcile();
 

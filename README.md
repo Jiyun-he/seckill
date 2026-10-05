@@ -37,11 +37,11 @@ Lua 内原子查重 → Redis Set 记录该场次参与用户 → 数据库唯�
 → [一致性设计 § 一人一单](doc/consistency.md#一人一单)
 
 **投递可靠性**
-开启 publisher confirm 与 return callback，并严格区分「明确失败」与「结果未知」：无法路由、nack、同步异常立即补偿；confirm 超时只标记 `RETRY` 交给对账，避免误补偿已投递的消息。消费端配置重试与死信队列，重试耗尽后进入 DLQ 执行幂等补偿。
+开启 publisher confirm 与 return callback，判据只有一条：能否证明消息没发出去。无法路由、同步异常可确定未投递，立即补偿；confirm nack 与回音丢失都无法证明，状态保持 `PENDING` 交给对账按数据库事实裁决，避免误补偿已投递的消息。消费端配置重试与死信队列，重试耗尽后进入 DLQ 执行幂等补偿。
 → [一致性设计 § 投递可靠性](doc/consistency.md#投递可靠性)
 
 **订单状态机与终态权威**
-预占状态以 Hash 存于 Redis（`PENDING → CONFIRMED → CONSUMED`，异常分支进入 `RETRY` / `FAILED`）。所有中间态转移走原子 CAS 脚本，终态 `FAILED` / `CONSUMED` 不可被晚到的 MQ 回调覆盖。
+预占状态以 Hash 存于 Redis（`PENDING → CONFIRMED → CONSUMED`，异常分支进入 `FAILED`）。所有中间态转移走原子 CAS 脚本，终态 `FAILED` / `CONSUMED` 不可被晚到的 MQ 回调覆盖。
 → [一致性设计 § 订单状态机](doc/consistency.md#订单状态机)
 
 **异常交易对账**

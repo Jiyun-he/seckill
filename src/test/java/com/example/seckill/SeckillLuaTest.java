@@ -174,12 +174,12 @@ class SeckillLuaTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void 终态FAILED不被晚到超时覆盖() throws Exception {
+    void 终态FAILED不被晚到ack覆盖() throws Exception {
         long orderNo = 780L;
         String orderKey = "seckill:order:" + orderNo;
         stringRedisTemplate.opsForHash().put(orderKey, "status", "FAILED");
 
-        Long result = executeUpdateStatusLua(orderKey, "RETRY");
+        Long result = executeUpdateStatusLua(orderKey, "CONFIRMED");
 
         assertThat(result).isEqualTo(0L);
         assertThat(statusOf(orderNo)).isEqualTo("FAILED");

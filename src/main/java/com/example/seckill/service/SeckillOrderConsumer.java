@@ -95,10 +95,12 @@ public class SeckillOrderConsumer {
         String startTime = (String) msg.get("startTime");
 
         // 终态检查：已补偿(FAILED)或已成功(CONSUMED)的交易禁止消费复活，直接幂等 ACK
+        // 用字符串比较而非 valueOf：Redis 中若残留已废弃的状态值，不应让消费抛异常中断
         Object statusObj = stringRedisTemplate.opsForHash().get("seckill:order:" + orderNo, "status");
         if (statusObj != null) {
-            SeckillOrderStatus status = SeckillOrderStatus.valueOf(statusObj.toString());
-            if (status == SeckillOrderStatus.FAILED || status == SeckillOrderStatus.CONSUMED) {
+            String statusName = statusObj.toString();
+            if (SeckillOrderStatus.FAILED.name().equals(statusName)
+                    || SeckillOrderStatus.CONSUMED.name().equals(statusName)) {
                 return;
             }
         }

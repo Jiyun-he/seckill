@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * 异常交易扫描与对账恢复：独立于正常异常路径的兜底机制。
  *
- * <p>当正常异常处理自身都未执行完（如 confirm 超时、补偿中断、消费者崩溃），
+ * <p>当正常异常处理自身都未执行完（如 confirm 未确认、补偿中断、消费者崩溃），
  * 由本 Scanner 定时扫描中间态预占记录，以 MySQL 订单为最终业务事实，
  * 将悬挂交易收敛到 SUCCESS / FAILED，并做轻量库存对账。</p>
  *
@@ -150,8 +150,7 @@ public class SeckillReconciliationScanner {
 
     private boolean isIntermediate(String status) {
         return SeckillOrderStatus.PENDING.name().equals(status)
-                || SeckillOrderStatus.CONFIRMED.name().equals(status)
-                || SeckillOrderStatus.RETRY.name().equals(status);
+                || SeckillOrderStatus.CONFIRMED.name().equals(status);
     }
 
     /**

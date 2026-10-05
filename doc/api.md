@@ -95,7 +95,7 @@ Token 由注册或登录接口返回，同时在 Redis 中保留登录态记录�
 
 | 返回状态 | 含义 |
 | --- | --- |
-| `PROCESSING` | 处理中（PENDING / CONFIRMED / RETRY 的对外合并视图） |
+| `PROCESSING` | 处理中（PENDING / CONFIRMED 的对外合并视图） |
 | `CONSUMED` | 已成功落库 |
 | `FAILED` | 最终失败，库存已补偿或校准 |
 | `NOT_FOUND` | Redis 无状态记录且数据库无订单 |

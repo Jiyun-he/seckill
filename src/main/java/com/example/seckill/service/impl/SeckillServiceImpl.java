@@ -303,20 +303,19 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
 
         CorrelationData correlationData = new CorrelationData(orderNo.toString());
 
-        // confirm 回调只更新状态：return 或 nack（明确失败）→ 即时幂等补偿；超时/结果未知 → RETRY；ack → CONFIRMED
+        // confirm 回调只更新状态：仅「消息确定未发出」才立即补偿；结果未知一律保持 PENDING 交对账
         correlationData.getFuture().whenComplete((confirm, ex) -> {
             if (correlationData.getReturned() != null) {
-                // 消息无法路由被退回（明确失败）
+                // 消息无法路由被退回：确定未入队、不可能被消费，可安全补偿
                 compensateRedis(stockKey, orderedKey, orderKey, userIdStr);
                 log.warn("订单 {} 消息无法路由，已补偿 Redis", orderNo);
-            } else if (ex != null) {
-                updateOrderStatus(orderKey, SeckillOrderStatus.RETRY, SeckillOrderStatus.INTERMEDIATE_TTL_SECONDS);
-                log.warn("订单 {} confirm 超时/异常，标记 RETRY 等待对账", orderNo);
-            } else if (confirm.isAck()) {
+            } else if (ex == null && confirm.isAck()) {
+                // 投递成功，等待消费落库
                 updateOrderStatus(orderKey, SeckillOrderStatus.CONFIRMED, SeckillOrderStatus.INTERMEDIATE_TTL_SECONDS);
             } else {
-                compensateRedis(stockKey, orderedKey, orderKey, userIdStr);
-                log.warn("订单 {} confirm nack，已补偿 Redis", orderNo);
+                // nack 或 future 异常完成：都只说明「没拿到可靠回音」，broker 可能已入队、
+                // 消息仍会被消费，故不做任何断言，保持 PENDING 交对账以 DB 事实裁决
+                log.warn("订单 {} confirm 未确认，状态保持 PENDING 等待对账", orderNo);
             }
         });
 

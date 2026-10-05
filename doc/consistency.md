@@ -72,7 +72,6 @@ Redis 中 `seckill:order:{orderNo}` 的 `status` 字段是**投递状态**，与
 | --- | --- | --- |
 | `PENDING` | 预占成功，消息发送中（confirm 前） | `SECKILL_LUA` |
 | `CONFIRMED` | confirm ack，消息已到达 Broker，等待消费落库 | confirm 回调 |
-| `RETRY` | confirm 超时或结果未知，待对账框架裁决 | confirm 回调 |
 | `FAILED` | 终态：最终失败，库存已补偿或校准 | 补偿路径、对账 Scanner |
 | `CONSUMED` | 终态：消费落库成功 | 消费者 `afterCommit` |
 
@@ -80,21 +79,29 @@ Redis 中 `seckill:order:{orderNo}` 的 `status` 字段是**投递状态**，与
         预占成功
            │
            ▼
-        PENDING ──confirm ack──→ CONFIRMED ──消费落库──→ CONSUMED
-           │                          │                     ▲
-           │                          │                     │
-    confirm 超时/结果未知              │            对账发现 DB 已有订单
-           │                          │            （不补偿，仅修状态）
-           ▼                          ▼                     │
-         RETRY ──────────────────→ 对账裁决 ────────────────┘
-                                      │
-                          重投耗尽 / 明确失败
-                                      │
-                                      ▼
-                                   FAILED
+        PENDING ──confirm ack──→ CONFIRMED          ┐ 中间态
+           │                        │                │ 悬挂 120s 由对账接管
+           └───────────┬────────────┘                ┘
+                       │
+                       ├──── 消费落库成功 ────→ CONSUMED（终态）
+                       │
+                   悬挂超时（120s 无更新）
+                       │
+                       ▼
+                   对账裁决
+                       │
+           ┌───────────┴───────────┐
+           │                       │
+      DB 已有订单              DB 无订单
+           │                       │
+           ▼                 重投（≤3 次）
+      修正为 CONSUMED              │
+                         重试耗尽 / 消息退回
+                                   ▼
+                               FAILED（终态）
 ```
 
-对外查询时，中间态会被合并展示。`SeckillOrderStatus#toUserVisible()` 把 `PENDING` / `CONFIRMED` / `RETRY` 统一映射为 `PROCESSING`，终态原样返回；查询时若 Redis 中已无记录（TTL 过期或从未写入），则以数据库订单是否存在为准，返回 `CONSUMED` 或 `NOT_FOUND`。
+对外查询时，中间态会被合并展示。`SeckillOrderStatus#toUserVisible()` 把 `PENDING` / `CONFIRMED` 统一映射为 `PROCESSING`，终态原样返回；查询时若 Redis 中已无记录（TTL 过期或从未写入），则以数据库订单是否存在为准，返回 `CONSUMED` 或 `NOT_FOUND`。
 
 因此 `GET /seckill/order/{orderNo}` 只是一个**尽力而为的查询视图**，数据库始终是最终事实。
 
@@ -102,16 +109,20 @@ TTL 分两档：中间态 3600 秒（超时交给对账），终态 86400 秒（
 
 ## 投递可靠性
 
-`sendSeckillOrderMessage()` 在发送时注册 `CorrelationData` 回调，按结果分四种情况处理：
+`sendSeckillOrderMessage()` 在发送时注册 `CorrelationData` 回调，按结果分三种情况处理：
 
 | 分支 | 触发条件 | 处理 |
 | --- | --- | --- |
-| 消息无法路由 | `getReturned() != null` | 明确失败 → 补偿 Redis |
-| confirm 超时 / 异常 | `ex != null` | 结果未知 → 状态置 `RETRY`，交对账 |
-| confirm ack | `confirm.isAck()` | 投递成功 → 状态置 `CONFIRMED` |
-| confirm nack | 其余 | 明确失败 → 补偿 Redis |
+| 消息无法路由 | `getReturned() != null` | 确定未入队 → 立即补偿 Redis |
+| confirm ack | `ex == null && confirm.isAck()` | 投递成功 → 状态置 `CONFIRMED` |
+| 其余（nack / future 异常完成） | `else` | 结果未知 → 不做断言，状态保持 `PENDING` 交对账 |
 
-关键区分是「**明确失败**」与「**结果未知**」：无法路由、nack、以及 `convertAndSend` 同步抛异常都能确定消息没有成功投递，可以立即补偿；而 confirm 超时只说明回答没回来，消息可能已经投出去了，此时若贸然补偿会造成「库存还回去了但订单也落库了」的双花，所以只标记 `RETRY` 交给对账框架按数据库事实裁决。
+判据只有一条：**能否证明消息没有发出去**。
+
+- **能证明**：`convertAndSend` 同步抛异常（消息根本没发出）、消息被退回（`getReturned() != null`，broker 收到但无处可投，未入队）。这两种情况下消息不可能被消费，立即补偿是安全的。
+- **不能证明**：confirm nack 与 future 异常完成。二者都只说明「没拿到可靠回音」——Spring AMQP 在连接断开时会为所有未确认消息补发 nack（`PublisherCallbackChannelImpl#generateNacksForPendingAcks`），此时消息可能**早已入队甚至已被消费**；而 `CorrelationData#getFuture()` 在框架内只有正常完成路径（`complete(Confirm)`），不存在异常完成。贸然补偿会造成「库存还回去了但订单也落库了」的双花，因此一律不做断言，交由对账按数据库事实裁决。
+
+代价是 broker 真 nack（队列满、内部错误）时反馈变慢：由「立即 `FAILED`」变为「120 秒超时 + 3 次重投后 `FAILED`」，约 8 分钟。相对于误判导致用户看到 24 小时的错误状态，这个取舍是有意的。
 
 ## 补偿与校准
 
@@ -162,7 +173,7 @@ TTL 分两档：中间态 3600 秒（超时交给对账），终态 86400 秒（
 
 ## 终态权威原则
 
-状态机的一个隐蔽缺陷是**晚到的 MQ 回调可能覆盖终态**：如果消费落库（`CONSUMED`）先完成，而 confirm ack 或超时回调后到，无条件 `HSET status` 会把终态回退成 `CONFIRMED` / `RETRY`，导致状态查询短暂显示错误。
+状态机的一个隐蔽缺陷是**晚到的 MQ 回调可能覆盖终态**：如果消费落库（`CONSUMED`）先完成，而 confirm ack 回调后到，无条件 `HSET status` 会把终态回退成 `CONFIRMED`，导致状态查询短暂显示错误。
 
 修复方式是让所有中间态转移走同一个原子 CAS 脚本 `UPDATE_STATUS_LUA`，与补偿脚本的终态检查对齐：
 
@@ -177,6 +188,8 @@ return 1
 ```
 
 即 **`FAILED` / `CONSUMED` 具有更高权威，不可被覆盖**。消费者侧同样有对称的检查：`handleSeckillOrder()` 开头若发现状态已是终态，直接幂等返回（ACK），不复活已补偿或已成功的交易。
+
+需要说明的是，消费者 `afterCommit` 写 `CONSUMED` 时**不走 CAS**，是无条件写入，这不是遗漏：该写发生在事务提交之后，以「订单已落库」这一既成事实为依据，是信息最全的写；而 CAS 要防的是信息更少的晚到回调。终态权威约束的是**后来者**，不是事实的确立者。
 
 ## 缓存防护
 

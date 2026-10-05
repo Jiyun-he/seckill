@@ -137,7 +137,7 @@ MySQL 条件更新扣减库存（stock >= quantity）
      ↓
 消费失败 → 重试；重试耗尽 → 死信队列幂等补偿
      ↓
-confirm 结果未知（超时）→ 状态置 RETRY，由对账 Scanner 兜底重投
+confirm 未确认（nack / 回音丢失）→ 状态保持 PENDING，由对账 Scanner 兜底重投
 ```
 
 接口返回订单号时订单尚未落库，只代表「已受理」。要确认最终结果，请轮询 [`GET /seckill/order/{orderNo}`](api.md#查询秒杀订单状态)，其状态语义见[一致性设计](consistency.md#订单状态机)。
