@@ -1,10 +1,13 @@
 package com.example.seckill.fault;
 
 import com.example.seckill.common.Result;
+
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import org.springframework.beans.factory.annotation.Autowired;
+
+import lombok.RequiredArgsConstructor;
+
 import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -24,21 +27,23 @@ import java.util.Map;
 @RequestMapping("/fault")
 @Profile("fault-test")
 @Tag(name = "故障注入")
+@RequiredArgsConstructor
 public class FaultInjectionController {
 
-    @Autowired
-    private FailpointService failpointService;
+    private final FailpointService failpointService;
 
     @PostMapping("/{id}/block")
     @Operation(summary = "启用 BLOCK 模式，命中后阻塞直到 release")
-    public Result<Void> enableBlock(@Parameter(description = "failpoint 标识") @PathVariable String id) {
+    public Result<Void> enableBlock(
+            @Parameter(description = "failpoint 标识") @PathVariable String id) {
         failpointService.enableBlock(id);
         return Result.success(null);
     }
 
     @PostMapping("/{id}/throw")
     @Operation(summary = "启用 THROW 模式，命中后抛 FaultInjectionException")
-    public Result<Void> enableThrow(@Parameter(description = "failpoint 标识") @PathVariable String id) {
+    public Result<Void> enableThrow(
+            @Parameter(description = "failpoint 标识") @PathVariable String id) {
         failpointService.enableThrow(id);
         return Result.success(null);
     }
@@ -59,7 +64,8 @@ public class FaultInjectionController {
 
     @GetMapping("/{id}")
     @Operation(summary = "查询单个 failpoint 状态")
-    public Result<Map<String, Object>> status(@Parameter(description = "failpoint 标识") @PathVariable String id) {
+    public Result<Map<String, Object>> status(
+            @Parameter(description = "failpoint 标识") @PathVariable String id) {
         return Result.success(failpointService.status(id));
     }
 

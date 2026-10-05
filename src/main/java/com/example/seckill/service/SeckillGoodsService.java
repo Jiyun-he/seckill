@@ -8,6 +8,4 @@ import com.example.seckill.entity.SeckillGoods;
  *
  * @author jiyunhe
  */
-
-public interface SeckillGoodsService extends IService<SeckillGoods> {
-}
+public interface SeckillGoodsService extends IService<SeckillGoods> {}

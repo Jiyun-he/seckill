@@ -9,7 +9,6 @@ import com.example.seckill.vo.OrderVO;
  *
  * @author jiyunhe
  */
-
 public interface OrderService extends IService<Order> {
 
     /**

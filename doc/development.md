@@ -8,6 +8,7 @@
 - [环境变量](#环境变量)
 - [Docker 部署](#docker-部署)
 - [本地运行](#本地运行)
+- [代码格式](#代码格式)
 - [项目结构](#项目结构)
 
 ## 环境要求
@@ -20,7 +21,13 @@
 
 ## 环境变量
 
-根目录 `.env` 提供 Docker Compose 读取的示例配置。完整变量清单：
+根目录 `.env.example` 提供 Docker Compose 配置模板。首次启动前复制为不纳入版本控制的 `.env`：
+
+```bash
+cp .env.example .env
+```
+
+完整变量清单：
 
 ### Compose 读取（宿主机与容器编排）
 
@@ -30,13 +37,13 @@
 | `MYSQL_DATABASE` | 初始化数据库名 | `seckill_db` |
 | `MYSQL_USER` | 应用连接使用的用户名 | `root` |
 | `MYSQL_PASSWORD` | 应用连接使用的密码 | `123456` |
-| `REDIS_PASSWORD` | Redis 密码，默认留空 | 空 |
 | `RABBITMQ_DEFAULT_USER` | RabbitMQ 用户名 | `seckill` |
 | `RABBITMQ_DEFAULT_PASS` | RabbitMQ 密码 | `seckill123` |
 | `RABBITMQ_DEFAULT_VHOST` | RabbitMQ vhost | `/` |
 | `SNOWFLAKE_WORKER_ID` | 雪花算法 workerId，多实例部署时必须互不相同 | `0` |
 | `SNOWFLAKE_DATACENTER_ID` | 雪花算法 datacenterId | `0` |
-| `SEKKILL_CONSUMER_CONCURRENCY` | 消费端并发数，用于容量调优 | `2` |
+| `JWT_SECRET` | JWT 签名密钥，非本地环境必须替换 | 至少 32 字符 |
+| `SECKILL_CONSUMER_CONCURRENCY` | 消费端并发数，用于容量调优 | `2` |
 | `DB_POOL_SIZE` | HikariCP 最大连接数 | `20` |
 
 ### 应用读取（`application.yml`）
@@ -48,17 +55,17 @@
 | `REDIS_HOST` / `REDIS_PORT` | `redis` / `6379` |
 | `RABBITMQ_HOST` / `RABBITMQ_PORT` | `rabbitmq` / `5672` |
 | `RABBITMQ_USER` / `RABBITMQ_PASS` / `RABBITMQ_VHOST` | `seckill` / `seckill123` / `/` |
+| `JWT_SECRET` | 本地开发占位值 |
 
 默认值面向容器内网络（服务名即主机名）。本地直接运行应用时需要把上述 host 全部改为 `localhost`，见[本地运行](#本地运行)。
 
-`JWT_SECRET` 目前未做外部化，密钥与过期时间直接写在 `application.yml` 的 `jwt` 节点下。**部署到任何非本地环境前必须替换默认密钥**。
+`JWT_SECRET` 已外部化；`application.yml` 中的回退值仅为了便于本地启动。**部署到任何非本地环境前必须显式设置强随机密钥**。
 
 ## Docker 部署
 
-`Dockerfile` 是单阶段构建，只做 `COPY target/*.jar`，**不编译源码**，因此必须先本地出包：
+`Dockerfile` 使用多阶段构建：第一阶段通过 Maven Wrapper 编译，第二阶段只保留 JRE 与应用 JAR，并以非 root 用户运行。直接执行：
 
 ```bash
-./mvnw clean package -DskipTests
 docker compose up -d --build
 ```
 
@@ -111,6 +118,7 @@ MYSQL_PORT=3306
 MYSQL_DATABASE=seckill_db
 MYSQL_USER=root
 MYSQL_PASSWORD=123456
+JWT_SECRET=replace-with-a-random-secret-of-at-least-32-characters
 REDIS_HOST=localhost
 REDIS_PORT=6379
 RABBITMQ_HOST=localhost
@@ -122,10 +130,30 @@ RABBITMQ_VHOST=/
 
 不建议把个人本地配置直接改写进 `application.yml`。
 
+## 代码格式
+
+项目使用 Spotless + google-java-format AOSP 风格统一 Java 代码。提交前执行：
+
+```bash
+./mvnw spotless:apply
+./mvnw verify
+```
+
+Windows PowerShell 下将 `./mvnw` 替换为 `.\mvnw.cmd`。
+
+`verify` 在 `validate` 阶段自动检查格式。完整的命名、分支、Commit 与 Pull Request 规范见 [`CONTRIBUTING.md`](../CONTRIBUTING.md)。
+
 ## 项目结构
 
 ```text
 seckill
+├── .github
+│   ├── scripts                 Commit 信息检查脚本
+│   ├── workflows
+│   │   └── ci.yml              GitHub Actions 格式与回归检查
+│   └── pull_request_template.md
+├── .env.example                    本地配置模板
+├── CONTRIBUTING.md                 贡献、代码风格与 Commit 规范
 ├── LICENSE
 ├── README.md
 ├── compose.yaml                  基础服务编排
@@ -149,7 +177,7 @@ seckill
 │   │   │   ├── fault             故障注入埋点
 │   │   │   ├── mapper            MyBatis-Plus Mapper
 │   │   │   ├── service           业务逻辑、MQ 消费者、对账任务
-│   │   │   ├── util / utils      雪花 ID、JWT
+│   │   │   ├── util              雪花 ID、JWT
 │   │   │   └── vo                响应视图对象
 │   │   └── resources
 │   │       └── application.yml

@@ -1,24 +1,26 @@
-package com.example.seckill.utils;
+package com.example.seckill.util;
 
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.JwtParser;
-import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+
 import lombok.Getter;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import javax.crypto.SecretKey;
 import java.util.Date;
+
+import javax.crypto.SecretKey;
 
 /**
  * JWT 生成、解析与校验工具类。
  *
  * @author jiyunhe
  */
-
 @Component
 public class JwtUtil {
 
@@ -58,10 +60,11 @@ public class JwtUtil {
      * 从 Token 中解析 userId
      */
     public Long getUserIdFromToken(String token) {
-        JwtParser parser = Jwts.parser()
-                // 指定验证签名使用的 key
-                .verifyWith(getSigningKey())
-                .build();
+        JwtParser parser =
+                Jwts.parser()
+                        // 指定验证签名使用的 key
+                        .verifyWith(getSigningKey())
+                        .build();
 
         Jws<Claims> jws = parser.parseSignedClaims(token);
 
@@ -73,10 +76,7 @@ public class JwtUtil {
      */
     public boolean validateToken(String token) {
         try {
-            Jwts.parser()
-                    .verifyWith(getSigningKey())
-                    .build()
-                    .parseSignedClaims(token);
+            Jwts.parser().verifyWith(getSigningKey()).build().parseSignedClaims(token);
             return true;
         } catch (JwtException | IllegalArgumentException e) {
             return false;

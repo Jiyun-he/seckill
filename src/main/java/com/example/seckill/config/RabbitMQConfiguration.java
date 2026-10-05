@@ -1,7 +1,13 @@
 package com.example.seckill.config;
 
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.core.*;
+
+import org.aopalliance.intercept.MethodInterceptor;
+import org.springframework.amqp.core.Binding;
+import org.springframework.amqp.core.BindingBuilder;
+import org.springframework.amqp.core.DirectExchange;
+import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.rabbit.config.RetryInterceptorBuilder;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
@@ -12,17 +18,16 @@ import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.aopalliance.intercept.MethodInterceptor;
 
 /**
  * RabbitMQ 交换机、队列、重试与容器工厂配置。
  *
  * @author jiyunhe
  */
-
 @Slf4j
 @Configuration
-public class RabbitMqConfig {
+public class RabbitMQConfiguration {
+
     public static final String SECKILL_QUEUE = "seckill.queue";
     public static final String SECKILL_EXCHANGE = "seckill.exchange";
     public static final String SECKILL_ROUTING_KEY = "seckill.order";
@@ -54,9 +59,7 @@ public class RabbitMqConfig {
 
     @Bean
     public Binding binding() {
-        return BindingBuilder.bind(seckillQueue())
-                .to(seckillExchange())
-                .with(SECKILL_ROUTING_KEY);
+        return BindingBuilder.bind(seckillQueue()).to(seckillExchange()).with(SECKILL_ROUTING_KEY);
     }
 
     @Bean
@@ -79,13 +82,14 @@ public class RabbitMqConfig {
 
     @Bean
     public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
-            ConnectionFactory connectionFactory, MethodInterceptor retryInterceptor,
+            ConnectionFactory connectionFactory,
+            MethodInterceptor retryInterceptor,
             @Value("${seckill.consumer.concurrency:2}") int consumerConcurrency) {
         SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
         factory.setConnectionFactory(connectionFactory);
         factory.setMessageConverter(new Jackson2JsonMessageConverter());
         factory.setAdviceChain(retryInterceptor);
-        // 消费者并发度由环境变量 SEKKILL_CONSUMER_CONCURRENCY 控制（默认 2），用于容量扩展实验
+        // 消费者并发度由环境变量 SECKILL_CONSUMER_CONCURRENCY 控制（默认 2），用于容量扩展实验
         factory.setConcurrentConsumers(consumerConcurrency);
         return factory;
     }
@@ -99,22 +103,26 @@ public class RabbitMqConfig {
     public RabbitTemplate rabbitTemplate(ConnectionFactory connectionFactory) {
         RabbitTemplate rabbitTemplate = new RabbitTemplate(connectionFactory);
         rabbitTemplate.setMessageConverter(new Jackson2JsonMessageConverter());
-        rabbitTemplate.setConfirmCallback((correlationData, ack, cause) -> {
-            String correlationId = correlationData != null ? correlationData.getId() : null;
-            if (ack) {
-                log.info("rabbitmq confirm ack=true correlationId={}", correlationId);
-            } else {
-                log.warn("rabbitmq confirm ack=false correlationId={} cause={}", correlationId, cause);
-            }
-        });
-        rabbitTemplate.setReturnsCallback(returned -> log.warn(
-                "rabbitmq return replyCode={} replyText={} exchange={} routingKey={}",
-                returned.getReplyCode(),
-                returned.getReplyText(),
-                returned.getExchange(),
-                returned.getRoutingKey()
-        ));
+        rabbitTemplate.setConfirmCallback(
+                (correlationData, ack, cause) -> {
+                    String correlationId = correlationData != null ? correlationData.getId() : null;
+                    if (ack) {
+                        log.info("rabbitmq confirm ack=true correlationId={}", correlationId);
+                    } else {
+                        log.warn(
+                                "rabbitmq confirm ack=false correlationId={} cause={}",
+                                correlationId,
+                                cause);
+                    }
+                });
+        rabbitTemplate.setReturnsCallback(
+                returned ->
+                        log.warn(
+                                "rabbitmq return replyCode={} replyText={} exchange={} routingKey={}",
+                                returned.getReplyCode(),
+                                returned.getReplyText(),
+                                returned.getExchange(),
+                                returned.getRoutingKey()));
         return rabbitTemplate;
     }
-
 }

@@ -11,7 +11,7 @@ import time
 
 import requests
 
-JMETER = r"F:\someSoftwares\apache-jmeter-5.6.3\apache-jmeter-5.6.3\bin\jmeter.bat"
+JMETER = os.environ.get("JMETER_BIN", "jmeter")
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 RABBITMQ_API = "http://localhost:15672/api"
 RABBITMQ_USER = "seckill"
@@ -24,7 +24,7 @@ STOCK = 20000
 
 
 def restart_app(level):
-    env = dict(os.environ, SEKKILL_CONSUMER_CONCURRENCY=str(level))
+    env = dict(os.environ, SECKILL_CONSUMER_CONCURRENCY=str(level))
     subprocess.run(["docker", "compose", "up", "-d", "app"], env=env,
                    cwd=os.path.dirname(TEST_DIR), capture_output=True, text=True)
     for _ in range(120):

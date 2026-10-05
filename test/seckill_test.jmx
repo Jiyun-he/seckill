@@ -36,7 +36,7 @@
       <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="读取用户Token CSV" enabled="true">
         <stringProp name="delimiter">,</stringProp>
         <stringProp name="fileEncoding">UTF-8</stringProp>
-        <stringProp name="filename">d:/learning/java/seckill/test/users.csv</stringProp>
+        <stringProp name="filename">${__P(usersFile,users.csv)}</stringProp>
         <boolProp name="ignoreFirstLine">true</boolProp>
         <boolProp name="quotedData">false</boolProp>
         <boolProp name="recycle">true</boolProp>
@@ -170,7 +170,7 @@
             <connectTime>true</connectTime>
           </value>
         </objProp>
-        <stringProp name="filename">d:/learning/java/seckill/test/result_${__P(threads,100)}t_${__time(yyyyMMdd_HHmmss)}.jtl</stringProp>
+        <stringProp name="filename">${__P(resultsFile,result_seckill.jtl)}</stringProp>
       </ResultCollector>
       <hashTree/>
 

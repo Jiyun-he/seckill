@@ -1,160 +1,176 @@
+<div align="center">
+
 # High Concurrency Seckill
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Java](https://img.shields.io/badge/Java-17-orange.svg)](https://openjdk.org/projects/jdk/17/)
-[![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.5.3-6DB33F.svg)](https://spring.io/projects/spring-boot)
+**Redis Lua 原子预占 · RabbitMQ 异步削峰 · MySQL 最终落库**
 
-基于 Spring Boot 的高并发秒杀系统。核心链路为：Redis Lua 原子预占 → RabbitMQ 异步削峰 → MySQL 最终落库，配合订单状态机、幂等补偿与异常交易对账，在瞬时高并发下保证**不超卖、不重复下单、不丢单**。
+一个聚焦「不超卖、不重复下单、异常可收敛」的高并发秒杀后端。
 
-秒杀接口把全部资格判定与库存扣减压进一次 Redis Lua 调用，随后异步投递消息并立即返回，同步路径不触碰 MySQL；订单落库由消费端完成，投递失败、结果未知、消费异常等各类失败窗口分别由即时补偿、死信补偿与对账任务兜底。
+[![CI](https://github.com/Jiyun-he/seckill/actions/workflows/ci.yml/badge.svg)](https://github.com/Jiyun-he/seckill/actions/workflows/ci.yml)
+[![Java](https://img.shields.io/badge/Java-17-E76F00?logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/17/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5.3-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
+[![Tests](https://img.shields.io/badge/tests-32-blue)](doc/testing.md)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-## 技术栈
+[ 快速开始 ](#-快速开始) · [ 架构设计 ](#-架构设计) · [ 测试与故障注入 ](#-测试与故障注入) · [ 贡献指南 ](CONTRIBUTING.md)
 
-| 模块 | 技术 |
+</div>
+
+---
+
+## ✨ 项目亮点
+
+| 热路径设计 | 一致性保障 | 故障恢复 | 工程化验证 |
+| --- | --- | --- | --- |
+| 资格校验、一人一单与库存扣减在单次 Redis Lua 中原子完成 | Redis 预占、MQ 投递、MySQL 落库通过状态机与幂等策略协同 | 即时补偿、死信补偿、定时对账分别覆盖不同失败窗口 | 32 个 Testcontainers 用例 + 5 类 Failpoint + JMeter 压测与压后核验 |
+
+与只展示「Redis 扣库存 + MQ 异步落库」的 Demo 不同，本项目主要回答一个更具体的问题：**在消息退回、confirm 回音丢失、消费者崩溃、重复消费与 Redis / DB 库存漂移时，订单如何最终回到可解释的终态。**
+
+## 🏗️ 架构设计
+
+```mermaid
+flowchart LR
+    U[Client] -->|JWT + HTTP| API[Spring Boot API]
+    API -->|Lua 原子预占| R[(Redis)]
+    API -->|order event| EX[RabbitMQ Exchange]
+    EX --> Q[Order Queue]
+    Q --> C[Order Consumer]
+    C -->|transaction| DB[(MySQL)]
+    Q -. retry exhausted .-> DLQ[Dead Letter Queue]
+    DLQ -->|idempotent compensation| R
+    S[Reconciliation Scanner] --> R
+    S -->|DB as source of truth| DB
+    S -. resend .-> EX
+```
+
+### 一次秒杀请求如何流转
+
+1. 启动时将活动时间与库存预热到 Redis。
+2. Lua 在一次执行中完成时间校验、一人一单查重、扣库存与预占状态写入。
+3. API 将订单事件投递到 RabbitMQ，立即返回雪花订单号，同步路径不访问 MySQL。
+4. 消费者在事务中写入订单并条件扣减 DB 库存，提交后将预占状态置为 `CONSUMED`。
+5. 不可判定的投递结果保留为中间态，对账任务以 MySQL 事实为准重投或补偿。
+
+### 核心不变式
+
+| 目标 | 实现 |
 | --- | --- |
-| 后端框架 | Spring Boot 3.5.3 |
-| Web 框架 | Spring Web MVC |
-| ORM 框架 | MyBatis-Plus 3.5.15 |
-| 数据库 | MySQL 8.0 |
-| 缓存 | Redis 6 |
-| 消息队列 | RabbitMQ |
-| 用户认证 | JWT + Redis |
-| 密码加密 | BCrypt |
-| 接口文档 | Knife4j / springdoc-openapi |
-| 参数校验 | Jakarta Validation |
-| 容器化 | Docker / Docker Compose |
-| 构建工具 | Maven |
-| 开发语言 | Java 17 |
+| 不超卖 | Lua 原子扣减 + MySQL `stock >= 1` 条件更新双重防线 |
+| 一人一单 | Lua 原子查重 + Redis Set + DB 唯一索引 `uk_user_seckill` |
+| 不重复落库 | `order_no` 幂等检查 + 数据库唯一约束 |
+| 不误补偿 | 只对「能证明消息未入队」的结果立即补偿；未知结果交给对账 |
+| 终态不回退 | `FAILED` / `CONSUMED` 为权威终态，晚到 confirm 回调不得覆盖 |
 
-## 核心设计
+> 详细的失败窗口、状态机与取舍见 [一致性设计](doc/consistency.md)。
 
-**Redis Lua 原子预占**
-活动时间段校验、一人一单查重、库存扣减、占位登记与预占状态写入在单个 Lua 脚本内完成。查重与占位处于同一原子操作，不存在「先查后写」的竞态窗口；时间校验读预热到 Redis 的活动配置，热路径不访问 MySQL。
-→ [一致性设计 § Lua 原子预占](doc/consistency.md#lua-原子预占)
+## 🧩 技术栈
 
-**一人一单三层保障**
-Lua 内原子查重 → Redis Set 记录该场次参与用户 → 数据库唯一索引 `uk_user_seckill` 最终兜底。
-→ [一致性设计 § 一人一单](doc/consistency.md#一人一单)
+| 领域 | 选型 |
+| --- | --- |
+| 应用层 | Java 17, Spring Boot 3.5.3, Spring Web MVC |
+| 数据层 | MySQL 8.0, MyBatis-Plus 3.5.15 |
+| 高并发链路 | Redis 6, Lua, RabbitMQ |
+| 安全与接口 | JWT, BCrypt, Jakarta Validation, Knife4j / OpenAPI |
+| 测试与运行 | JUnit 5, Testcontainers, JMeter, Docker Compose, GitHub Actions |
 
-**投递可靠性**
-开启 publisher confirm 与 return callback，判据只有一条：能否证明消息没发出去。无法路由、同步异常可确定未投递，立即补偿；confirm nack 与回音丢失都无法证明，状态保持 `PENDING` 交给对账按数据库事实裁决，避免误补偿已投递的消息。消费端配置重试与死信队列，重试耗尽后进入 DLQ 执行幂等补偿。
-→ [一致性设计 § 投递可靠性](doc/consistency.md#投递可靠性)
+## 🚀 快速开始
 
-**订单状态机与终态权威**
-预占状态以 Hash 存于 Redis（`PENDING → CONFIRMED → CONSUMED`，异常分支进入 `FAILED`）。所有中间态转移走原子 CAS 脚本，终态 `FAILED` / `CONSUMED` 不可被晚到的 MQ 回调覆盖。
-→ [一致性设计 § 订单状态机](doc/consistency.md#订单状态机)
+### 前置条件
 
-**异常交易对账**
-定时扫描超时中间态记录，以 MySQL 订单为最终事实：已落库则修正状态且禁止补偿，未落库则有限重投、耗尽后补偿。另有每 5 分钟的轻量库存对账。
-→ [一致性设计 § 异常交易对账](doc/consistency.md#异常交易对账)
+- Docker Desktop 或 Docker Engine，支持 Docker Compose v2
+- Git
 
-**故障注入测试**
-内置 Failpoint 埋点（`fault-test` profile 下生效，默认全部 No-Op），可在精确失败窗口注入阻塞或异常，用于验证上述每条防护是否真的兜住。
-→ [测试 § 故障注入](doc/testing.md#故障注入)
-
-## 快速开始
-
-### 1. 克隆并出包
-
-`Dockerfile` 只做 `COPY target/*.jar`，不编译源码，因此必须先本地构建：
+### 启动完整环境
 
 ```bash
 git clone https://github.com/Jiyun-he/seckill.git
 cd seckill
-./mvnw clean package -DskipTests
-```
-
-### 2. 配置环境变量
-
-根目录 `.env` 已提供示例，Docker Compose 会自动读取：
-
-```env
-MYSQL_ROOT_PASSWORD=123456
-MYSQL_DATABASE=seckill_db
-MYSQL_USER=root
-MYSQL_PASSWORD=123456
-
-REDIS_PASSWORD=
-
-RABBITMQ_DEFAULT_USER=seckill
-RABBITMQ_DEFAULT_PASS=seckill123
-RABBITMQ_DEFAULT_VHOST=/
-```
-
-完整变量清单见[开发与部署 § 环境变量](doc/development.md#环境变量)。
-
-### 3. 启动
-
-```bash
+cp .env.example .env
 docker compose up -d --build
 ```
 
-### 4. 访问
+Docker 会在多阶段构建中自动编译应用，无需本机预装 Maven。启动后可访问：
 
 | 服务 | 地址 |
 | --- | --- |
-| 后端服务 | `http://localhost:8080` |
-| 接口文档（Knife4j） | `http://localhost:8080/doc.html` |
+| 健康检查 | `http://localhost:8080/actuator/health` |
+| 交互式 API 文档 | `http://localhost:8080/doc.html` |
 | RabbitMQ Management | `http://localhost:15672` |
 
-RabbitMQ 管理后台账号来自 `.env`（默认 `seckill` / `seckill123`）。
+> PowerShell 可使用 `Copy-Item .env.example .env`。`.env.example` 仅用于本地演示，非本地环境请先替换其中凭据与 `JWT_SECRET`。
 
-### 5. 试一下秒杀
+### 试一次秒杀
 
 ```bash
-# 注册并拿到 token
-curl -X POST localhost:8080/user/register \
+# 1. 注册并从响应 data 字段取得 token
+curl -X POST http://localhost:8080/user/register \
   -H 'Content-Type: application/json' \
   -d '{"username":"demo","password":"123456"}'
 
-# 执行秒杀，返回订单号（此时订单尚未落库）
-curl -X POST localhost:8080/seckill/do/1 -H "Authorization: Bearer <token>"
+# 2. 提交秒杀；返回订单号时代表「已受理」
+curl -X POST http://localhost:8080/seckill/do/1 \
+  -H 'Authorization: Bearer <token>'
 
-# 轮询订单状态，直到 PROCESSING 收敛为 CONSUMED
-curl localhost:8080/seckill/order/<orderNo> -H "Authorization: Bearer <token>"
+# 3. 轮询状态，直到 PROCESSING 收敛为 CONSUMED 或 FAILED
+curl http://localhost:8080/seckill/order/<orderNo> \
+  -H 'Authorization: Bearer <token>'
 ```
 
-其余命令：
+更多启动、本地调试与环境变量说明见 [开发与部署](doc/development.md)。
 
-```bash
-docker compose ps            # 查看服务状态
-docker compose logs -f app   # 跟踪后端日志
+## 🧪 测试与故障注入
+
+| 类别 | 覆盖内容 | 入口 |
+| --- | --- | --- |
+| 自动化回归 | 32 个用例，覆盖 Lua 原子性、HTTP 语义、MQ 回调、消费落库、对账与库存预热 | `./mvnw test` |
+| 故障注入 | 在发送前、插入前、事务提交后、补偿后等精确窗口阻塞或抛错 | `fault-test` profile |
+| 一致性压测 | 少库存竞争、单用户重复请求、混合重复流量，压后核验 DB / Redis / MQ | `test/run_consistency.py` |
+| 容量实验 | 性能阶梯与消费并发度对照 | `test/run_performance.py` |
+
+自动化测试使用 Testcontainers 拉起隔离的 MySQL / Redis / RabbitMQ，本机需有可用的 Docker 守护进程。详细用例分布见 [测试文档](doc/testing.md)，压测脚本用法见 [`test/README.md`](test/README.md)。
+
+## 🗂️ 项目结构
+
+```text
+seckill/
+├── .github/                       # CI、提交信息检查与 PR 模板
+├── CONTRIBUTING.md                # 贡献、代码风格与 Commit 规范
+├── doc/                           # 架构、一致性、API、数据模型等文档
+├── docker/mysql/init/             # MySQL 建表与演示数据
+├── src/main/java/.../seckill/
+│   ├── controller/                # REST 接口层
+│   ├── service/                   # 业务服务、MQ 消费与对账任务
+│   ├── mapper/                    # MyBatis-Plus 数据访问
+│   ├── entity/ dto/ vo/ converter/# 边界模型与转换
+│   ├── config/                    # Redis / RabbitMQ / Web / MyBatis-Plus
+│   └── fault/                     # 仅测试 profile 生效的 Failpoint
+├── src/test/                      # Testcontainers 集成测试
+├── test/                          # JMeter、压测编排与故障注入脚本
+├── compose.yaml
+└── Dockerfile                     # 编译 + 非 root 运行的多阶段镜像
 ```
 
-需要在 IDE 中调试应用时，见[开发与部署 § 本地运行](doc/development.md#本地运行)。
+## 📖 文档导航
 
-## 文档
-
-| 文档 | 内容 |
+| 文档 | 适合了解 |
 | --- | --- |
-| [架构与核心链路](doc/architecture.md) | 分层结构、包结构、认证 / 普通下单 / 秒杀下单链路 |
-| [数据模型](doc/data-model.md) | 表结构与索引、Redis 键空间、RabbitMQ 拓扑 |
-| [一致性设计](doc/consistency.md) | 原子预占、状态机、投递可靠性、补偿校准、对账、缓存防护 |
-| [API 参考](doc/api.md) | 接口清单、响应格式、请求示例 |
-| [开发与部署](doc/development.md) | 环境变量、Docker 部署、本地运行、项目结构 |
-| [测试](doc/testing.md) | 自动化测试、故障注入、压力测试、手工验证 |
-| [路线图](doc/roadmap.md) | 后续方向与当前边界 |
-| [test/README.md](test/README.md) | 压测与故障注入脚本说明 |
+| [架构与核心链路](doc/architecture.md) | 分层、组件边界、认证 / 普通下单 / 秒杀链路 |
+| [一致性设计](doc/consistency.md) | Lua 预占、状态机、投递可靠性、补偿与对账 |
+| [数据模型](doc/data-model.md) | MySQL 表与索引、Redis 键空间、RabbitMQ 拓扑 |
+| [API 参考](doc/api.md) | 接口、响应语义与调用示例 |
+| [开发与部署](doc/development.md) | 环境变量、Docker 部署、IDE 调试与目录说明 |
+| [测试](doc/testing.md) | 回归测试、Failpoint、压测和手工验证 |
+| [路线图](doc/roadmap.md) | 已知边界与后续方向 |
+| [贡献指南](CONTRIBUTING.md) | 分支、代码风格、Commit 约定与 PR 清单 |
 
-## 测试
+## 📌 当前边界
 
-**自动化回归**：28 个用例，基于 Testcontainers 拉起隔离的 MySQL / Redis / RabbitMQ，无需本机环境。
+项目当前聚焦于「秒杀交易链路的正确性」，而非完整电商产品：尚未实现支付 / 取消 / 超时关单、前端页面、接入层限流，中间件默认也是单实例编排。这些限制不隐藏，已在 [路线图](doc/roadmap.md) 中明确记录。
 
-```bash
-./mvnw test                            # 全量
-./mvnw -Dtest=SeckillLuaTest test      # 单个测试类
-```
+## 🤝 贡献
 
-**故障注入**：覆盖 5 个精确失败窗口，验证每条防护路径。
-
-```bash
-docker compose -f compose.yaml -f compose.fault-test.yaml up -d --build
-python test/failpoint/fault.py block commit_after
-python test/failpoint/observe.py
-```
-
-**压力测试**：一致性压测、性能阶梯压测、消费并发扩展实验三类，压后由 `verify_pressure.py` 一键核验。详见 [test/README.md](test/README.md)。
+仓库使用 Spotless 自动统一 Java 格式，提交消息遵循 Conventional Commits，两者均由 CI 校验。分支、代码风格、测试要求与 PR 清单见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## License
 
-[Apache License 2.0](LICENSE)
+This project is licensed under the [Apache License 2.0](LICENSE).

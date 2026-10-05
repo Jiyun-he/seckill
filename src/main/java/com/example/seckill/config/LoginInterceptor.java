@@ -1,36 +1,37 @@
 package com.example.seckill.config;
 
 import com.example.seckill.common.BusinessException;
-import com.example.seckill.utils.JwtUtil;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.example.seckill.util.JwtUtil;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+
+import lombok.RequiredArgsConstructor;
+
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
-
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
 
 /**
  * 登录拦截器，校验 JWT 并维护登录态。
  *
  * @author jiyunhe
  */
-
 @Component
+@RequiredArgsConstructor
 public class LoginInterceptor implements HandlerInterceptor {
 
     /** Authorization 请求头的 Bearer 前缀 */
     private static final String TOKEN_PREFIX = "Bearer ";
 
-    @Autowired
-    private JwtUtil jwtUtil;
-
-    @Autowired
-    private RedisTemplate<String, String> redisTemplate;
+    private final JwtUtil jwtUtil;
+    private final RedisTemplate<String, String> redisTemplate;
 
     @Override
-    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+    public boolean preHandle(
+            HttpServletRequest request, HttpServletResponse response, Object handler)
+            throws Exception {
         // 从请求头获取 token
         String token = request.getHeader("Authorization");
         if (token == null || !token.startsWith(TOKEN_PREFIX)) {

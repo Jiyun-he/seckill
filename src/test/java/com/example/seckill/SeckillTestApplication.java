@@ -9,5 +9,4 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * @author jiyunhe
  */
 @SpringBootApplication
-public class SeckillTestApplication {
-}
+public class SeckillTestApplication {}

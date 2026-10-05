@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 
-JMETER = r"F:\someSoftwares\apache-jmeter-5.6.3\apache-jmeter-5.6.3\bin\jmeter.bat"
+JMETER = os.environ.get("JMETER_BIN", "jmeter")
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 
 

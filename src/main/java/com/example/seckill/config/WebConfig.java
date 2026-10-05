@@ -5,7 +5,9 @@ import io.swagger.v3.oas.annotations.enums.SecuritySchemeType;
 import io.swagger.v3.oas.annotations.security.SecurityScheme;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
-import org.springframework.beans.factory.annotation.Autowired;
+
+import lombok.RequiredArgsConstructor;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
@@ -16,27 +18,26 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  *
  * @author jiyunhe
  */
-
 @Configuration
+@RequiredArgsConstructor
 @SecurityScheme(
         name = "bearerAuth",
         type = SecuritySchemeType.HTTP,
         scheme = "bearer",
         bearerFormat = "JWT",
-        in = SecuritySchemeIn.HEADER
-)
+        in = SecuritySchemeIn.HEADER)
 public class WebConfig implements WebMvcConfigurer {
 
-    @Autowired
-    private LoginInterceptor loginInterceptor;
+    private final LoginInterceptor loginInterceptor;
 
     @Bean
     public OpenAPI openApi() {
         return new OpenAPI()
-                .info(new Info()
-                        .title("High Concurrency Seckill API")
-                        .description("High Concurrency Seckill System API Documentation")
-                        .version("v0.0.1"));
+                .info(
+                        new Info()
+                                .title("High Concurrency Seckill API")
+                                .description("High Concurrency Seckill System API Documentation")
+                                .version("v0.0.1"));
     }
 
     @Override
@@ -45,6 +46,16 @@ public class WebConfig implements WebMvcConfigurer {
                 // 拦截所有
                 .addPathPatterns("/**")
                 // 排除登录注册、API文档、Actuator等
-                .excludePathPatterns("/user/login", "/user/register", "/hello", "/doc.html", "/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**", "/webjars/**", "/actuator/**", "/fault/**");
+                .excludePathPatterns(
+                        "/user/login",
+                        "/user/register",
+                        "/hello",
+                        "/doc.html",
+                        "/swagger-ui.html",
+                        "/swagger-ui/**",
+                        "/v3/api-docs/**",
+                        "/webjars/**",
+                        "/actuator/**",
+                        "/fault/**");
     }
 }

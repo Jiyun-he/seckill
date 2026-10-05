@@ -1,5 +1,10 @@
 package com.example.seckill;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.when;
+
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.example.seckill.entity.Order;
@@ -8,6 +13,7 @@ import com.example.seckill.mapper.OrderMapper;
 import com.example.seckill.mapper.SeckillGoodsMapper;
 import com.example.seckill.service.SeckillGoodsService;
 import com.example.seckill.service.SeckillOrderConsumer;
+
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentMatchers;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,11 +23,6 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.Map;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.when;
 
 /**
  * 消费事务回滚测试（#12）。
@@ -39,15 +40,11 @@ class SeckillOrderConsumerRollbackTest extends AbstractIntegrationTest {
     private static final long GOODS_ID = 1L;
     private static final String VERSION = "20260101000000";
 
-    @Autowired
-    private SeckillOrderConsumer consumer;
-    @Autowired
-    private OrderMapper orderMapper;
-    @Autowired
-    private SeckillGoodsMapper seckillGoodsMapper;
+    @Autowired private SeckillOrderConsumer consumer;
+    @Autowired private OrderMapper orderMapper;
+    @Autowired private SeckillGoodsMapper seckillGoodsMapper;
 
-    @MockitoBean
-    private SeckillGoodsService seckillGoodsService;
+    @MockitoBean private SeckillGoodsService seckillGoodsService;
 
     @Test
     void consume_下游异常导致整事务回滚() {
@@ -61,7 +58,8 @@ class SeckillOrderConsumerRollbackTest extends AbstractIntegrationTest {
 
         when(seckillGoodsService.getById(GOODS_ID)).thenReturn(sg);
         doThrow(new RuntimeException("模拟库存扣减异常"))
-                .when(seckillGoodsService).update(ArgumentMatchers.<Wrapper<SeckillGoods>>any());
+                .when(seckillGoodsService)
+                .update(ArgumentMatchers.<Wrapper<SeckillGoods>>any());
 
         assertThatThrownBy(() -> consumer.handleSeckillOrder(msg(orderNo)))
                 .isInstanceOf(RuntimeException.class);
@@ -82,6 +80,7 @@ class SeckillOrderConsumerRollbackTest extends AbstractIntegrationTest {
     }
 
     private long countOrders(long orderNo) {
-        return orderMapper.selectCount(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
+        return orderMapper.selectCount(
+                new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
     }
 }

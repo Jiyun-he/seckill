@@ -1,6 +1,7 @@
 package com.example.seckill.fault;
 
 import lombok.extern.slf4j.Slf4j;
+
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -26,7 +27,11 @@ import java.util.concurrent.atomic.AtomicReference;
 public class DefaultFailpointService implements FailpointService {
 
     /** failpoint 模式 */
-    private enum Mode { NONE, BLOCK, THROW }
+    private enum Mode {
+        NONE,
+        BLOCK,
+        THROW
+    }
 
     /** 单个 failpoint 的运行状态 */
     private static final class State {

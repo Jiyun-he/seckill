@@ -3,10 +3,14 @@ package com.example.seckill.controller;
 import com.example.seckill.common.Result;
 import com.example.seckill.entity.User;
 import com.example.seckill.mapper.UserMapper;
+
 import io.swagger.v3.oas.annotations.Hidden;
-import org.springframework.beans.factory.annotation.Autowired;
+
+import lombok.RequiredArgsConstructor;
+
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
+
 import java.util.List;
 
 /**
@@ -14,13 +18,12 @@ import java.util.List;
  *
  * @author jiyunhe
  */
-
 @Hidden
 @RestController
+@RequiredArgsConstructor
 public class TestController {
 
-    @Autowired
-    private UserMapper userMapper;
+    private final UserMapper userMapper;
 
     @GetMapping("/test/db")
     public Result<List<User>> testDb() {

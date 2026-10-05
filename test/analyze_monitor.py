@@ -1,7 +1,9 @@
 import csv
+from pathlib import Path
 
 rows = []
-with open('test/monitor_perf.csv', encoding='utf-8') as f:
+report_path = Path(__file__).with_name("monitor_perf.csv")
+with report_path.open(encoding="utf-8") as f:
     for r in csv.DictReader(f):
         rows.append(r)
 

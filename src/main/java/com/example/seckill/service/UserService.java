@@ -8,7 +8,6 @@ import com.example.seckill.entity.User;
  *
  * @author jiyunhe
  */
-
 public interface UserService extends IService<User> {
 
     /**

@@ -19,18 +19,18 @@
 - Python 3，依赖 `pymysql`、`redis`、`requests`
 - Apache JMeter 5.6.x（仅命令行模式）
 
-Python 相关的数据库与中间件连接参数目前直接写在脚本顶部（`localhost` + `.env` 中的默认账号密码），与项目默认配置一致。
+Python 相关的数据库与中间件连接参数目前直接写在脚本顶部（`localhost` + `.env.example` 中的默认账号密码），与项目默认配置一致。
 
-### 需要先改的两处本机路径
+### JMeter 命令
 
-脚本和 JMX 场景中存在**硬编码的本机绝对路径**，在别的机器上运行前必须修改：
+默认直接调用 `PATH` 中的 `jmeter`。如未将 JMeter 加入 `PATH`，可通过 `JMETER_BIN` 传入可执行文件路径：
 
-| 文件 | 硬编码内容 |
-| --- | --- |
-| `run_performance.py`、`run_consistency.py`、`run_concurrency_test.py` | `JMETER = r"F:\someSoftwares\apache-jmeter-5.6.3\apache-jmeter-5.6.3\bin\jmeter.bat"` |
-| `seckill_test.jmx`、`scene1~3_*.jmx` | CSV 输入（`users.csv`、`single_user.csv`）与 `.jtl` 输出均写死为 `d:/learning/java/seckill/test/...` |
+```powershell
+$env:JMETER_BIN = "C:\tools\apache-jmeter-5.6.3\bin\jmeter.bat"
+python test/run_performance.py
+```
 
-JMX 中的路径可直接改为相对路径（相对于执行 JMeter 时的工作目录），或按需替换为你的实际路径。
+JMX 中的 CSV 与结果路径默认相对于 `test/` 目录，也可用 `-JusersFile=<path>` 和 `-JresultsFile=<path>` 覆盖。
 
 ## 压测脚本
 

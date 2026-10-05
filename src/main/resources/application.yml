@@ -29,22 +29,23 @@ spring:
       mandatory: true
 mybatis-plus:
   configuration:
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
   global-config:
     db-config:
       id-type: auto
   mapper-locations: classpath*:/mapper/**/*.xml
 jwt:
-  secret: "your-256-bit-secret-your-256-bit-secret" # at least 32character
-  expiration: 86400000 # 24h
+  secret: ${JWT_SECRET:your-256-bit-secret-your-256-bit-secret}
+  expiration: 86400000
 snowflake:
   worker-id: ${SNOWFLAKE_WORKER_ID:0}
   datacenter-id: ${SNOWFLAKE_DATACENTER_ID:0}
 seckill:
   consumer:
-    concurrency: ${SEKKILL_CONSUMER_CONCURRENCY:2}
+    # Keep the misspelled variable as a compatibility fallback for existing deployments.
+    concurrency: ${SECKILL_CONSUMER_CONCURRENCY:${SEKKILL_CONSUMER_CONCURRENCY:2}}
 server:
-  port: 8080
+  port: ${APP_PORT:8080}
 
 knife4j:
   enable: true

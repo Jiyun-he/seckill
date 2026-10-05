@@ -20,36 +20,46 @@ public class SnowflakeIdUtil {
 
     /** 机器 ID 占用的位数 */
     private static final long WORKER_ID_BITS = 5L;
+
     /** 数据中心 ID 占用的位数 */
     private static final long DATACENTER_ID_BITS = 5L;
+
     /** 序列号占用的位数 */
     private static final long SEQUENCE_BITS = 12L;
 
     /** 最大机器 ID（5bit = 31） */
     private static final long MAX_WORKER_ID = ~(-1L << WORKER_ID_BITS);
+
     /** 最大数据中心 ID（5bit = 31） */
     private static final long MAX_DATACENTER_ID = ~(-1L << DATACENTER_ID_BITS);
+
     /** 最大序列号（12bit = 4095） */
     private static final long MAX_SEQUENCE = ~(-1L << SEQUENCE_BITS);
 
     /** 机器 ID 左移 12 位 */
     private static final long WORKER_ID_SHIFT = SEQUENCE_BITS;
+
     /** 数据中心 ID 左移 17 位 */
     private static final long DATACENTER_ID_SHIFT = SEQUENCE_BITS + WORKER_ID_BITS;
+
     /** 时间戳左移 22 位 */
     private static final long TIMESTAMP_SHIFT = SEQUENCE_BITS + WORKER_ID_BITS + DATACENTER_ID_BITS;
 
     /** 工作机器 ID（0~31） */
     private final long workerId;
+
     /** 数据中心 ID（0~31） */
     private final long datacenterId;
+
     /** 序列号（0~4095） */
     private long sequence = 0L;
+
     /** 上次生成 ID 的时间戳 */
     private long lastTimestamp = -1L;
 
-    public SnowflakeIdUtil(@Value("${snowflake.worker-id:0}") long workerId,
-                           @Value("${snowflake.datacenter-id:0}") long datacenterId) {
+    public SnowflakeIdUtil(
+            @Value("${snowflake.worker-id:0}") long workerId,
+            @Value("${snowflake.datacenter-id:0}") long datacenterId) {
         if (workerId > MAX_WORKER_ID || workerId < 0) {
             throw new IllegalArgumentException("workerId 必须在 0~" + MAX_WORKER_ID + " 之间");
         }

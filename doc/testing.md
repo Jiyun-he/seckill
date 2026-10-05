@@ -23,14 +23,14 @@
 
 ### 用例分布
 
-共 31 个用例：
+共 32 个用例：
 
 | 测试类 | 用例数 | 覆盖内容 |
 | --- | ---: | --- |
 | `SeckillLuaTest` | 10 | Lua 原子预占的正常 / 重复用户 / 库存为 0 / 活动未开始 / 活动已结束；补偿的正常恢复与重复补偿幂等；状态机终态权威（PENDING 升 CONFIRMED、CONSUMED 与 FAILED 不被晚到回调覆盖） |
 | `SeckillConfirmCallbackTest` | 3 | confirm 回调的补偿边界：ack 置 `CONFIRMED`；nack 不补偿、库存与占位保持、状态停留 `PENDING`；消息无法路由立即补偿并置 `FAILED` |
 | `SeckillReconciliationTest` | 5 | 对账收敛：悬挂且 DB 已有订单 → 修正且不补偿；悬挂且无订单 → 未耗尽重投并累加 retryCount；耗尽 → 补偿；终态不重复处理；库存对账按 DB 校准 |
-| `SeckillOrderConsumerTest` | 4 | 消费落库、重复消费幂等、并发重复消费、DB 库存不足时的漂移校准 |
+| `SeckillOrderConsumerTest` | 5 | 消费落库、重复消费幂等、并发重复消费、一人一单前两层失效时唯一索引兜底与第二笔预占归还、DB 库存不足时的漂移校准 |
 | `HttpSemanticsTest` | 3 | HTTP 异常语义：404 / 409 / 500 |
 | `SeckillStockInitTest` | 2 | 启动预热写入带活动版本的库存与活动时间；清理旧版僵尸 key |
 | `SnowflakeIdUtilTest` | 2 | 批量生成无重复、不同 workerId 不碰撞 |

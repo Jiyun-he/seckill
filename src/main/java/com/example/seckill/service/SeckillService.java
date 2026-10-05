@@ -10,7 +10,6 @@ import com.example.seckill.vo.SeckillOrderStatusVO;
  *
  * @author jiyunhe
  */
-
 public interface SeckillService extends IService<SeckillGoods> {
 
     /**
@@ -45,7 +44,7 @@ public interface SeckillService extends IService<SeckillGoods> {
      * 查询秒杀订单异步状态：优先读 Redis 预占状态，未命中时兜底查数据库订单。
      *
      * @param orderNo 订单号
-     * @return 订单状态（PROCESSING / SUCCESS / FAILED / NOT_FOUND）
+     * @return 订单状态（PROCESSING / CONSUMED / FAILED / NOT_FOUND）
      */
     SeckillOrderStatusVO getSeckillOrderStatus(Long orderNo);
 

@@ -1,12 +1,13 @@
 package com.example.seckill;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import com.example.seckill.util.SnowflakeIdUtil;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.HashSet;
 import java.util.Set;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * 雪花算法基础唯一性测试（#19）。

@@ -2,6 +2,8 @@ agent.md
 HELP.md
 docs/
 target/
+.env
+!.env.example
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
@@ -33,6 +35,10 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Python ###
+__pycache__/
+*.py[cod]
 
 ### 压测产物 ###
 test/*.jtl

@@ -1,8 +1,14 @@
 package com.example.seckill;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+
 import com.example.seckill.common.SeckillOrderStatus;
-import com.example.seckill.config.RabbitMqConfig;
+import com.example.seckill.config.RabbitMQConfiguration;
 import com.example.seckill.service.SeckillService;
+
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.amqp.core.Message;
@@ -14,11 +20,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.util.Map;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.verify;
 
 /**
  * confirm 回调的补偿边界测试（#21~#23）。
@@ -41,11 +42,9 @@ class SeckillConfirmCallbackTest extends AbstractIntegrationTest {
     private static final String ORDERED_KEY = "seckill:ordered:1:20260101000000";
     private static final String ORDER_KEY_PREFIX = "seckill:order:";
 
-    @Autowired
-    private SeckillService seckillService;
+    @Autowired private SeckillService seckillService;
 
-    @MockitoBean
-    private RabbitTemplate rabbitTemplate;
+    @MockitoBean private RabbitTemplate rabbitTemplate;
 
     @Test
     void confirm_ack时置为已确认且不补偿() {
@@ -63,7 +62,9 @@ class SeckillConfirmCallbackTest extends AbstractIntegrationTest {
         Long orderNo = seckillService.seckill(USER_ID, GOODS_ID);
 
         // 连接断开时框架会为所有未确认消息补发 nack，它无法证明消息未入队，因此不得补偿
-        captureCorrelationData().getFuture().complete(new CorrelationData.Confirm(false, "Channel closed"));
+        captureCorrelationData()
+                .getFuture()
+                .complete(new CorrelationData.Confirm(false, "Channel closed"));
 
         assertThat(statusOf(orderNo)).isEqualTo(SeckillOrderStatus.PENDING.name());
         assertThat(stockLeft()).isEqualTo("49");
@@ -76,8 +77,13 @@ class SeckillConfirmCallbackTest extends AbstractIntegrationTest {
 
         CorrelationData correlationData = captureCorrelationData();
         // 退回先于确认到达，且随附的通常是 ack（broker 收到了但无处可投）
-        correlationData.setReturned(new ReturnedMessage(new Message(new byte[0]), 312, "NO_ROUTE",
-                RabbitMqConfig.SECKILL_EXCHANGE, RabbitMqConfig.SECKILL_ROUTING_KEY));
+        correlationData.setReturned(
+                new ReturnedMessage(
+                        new Message(new byte[0]),
+                        312,
+                        "NO_ROUTE",
+                        RabbitMQConfiguration.SECKILL_EXCHANGE,
+                        RabbitMQConfiguration.SECKILL_ROUTING_KEY));
         correlationData.getFuture().complete(new CorrelationData.Confirm(true, null));
 
         assertThat(statusOf(orderNo)).isEqualTo(SeckillOrderStatus.FAILED.name());
@@ -90,11 +96,12 @@ class SeckillConfirmCallbackTest extends AbstractIntegrationTest {
     /** 捕获 seckill 投递时使用的 CorrelationData，供测试手动完成其 future。 */
     private CorrelationData captureCorrelationData() {
         ArgumentCaptor<CorrelationData> captor = ArgumentCaptor.forClass(CorrelationData.class);
-        verify(rabbitTemplate).convertAndSend(
-                eq(RabbitMqConfig.SECKILL_EXCHANGE),
-                eq(RabbitMqConfig.SECKILL_ROUTING_KEY),
-                any(Map.class),
-                captor.capture());
+        verify(rabbitTemplate)
+                .convertAndSend(
+                        eq(RabbitMQConfiguration.SECKILL_EXCHANGE),
+                        eq(RabbitMQConfiguration.SECKILL_ROUTING_KEY),
+                        any(Map.class),
+                        captor.capture());
         return captor.getValue();
     }
 

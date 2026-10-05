@@ -1,0 +1,10 @@
+# <type>(<scope>): <description>
+#
+# Types: feat, fix, refactor, perf, test, docs, build, ci, style, chore, revert
+# Suggested scopes: api, auth, seckill, mq, redis, db, reconcile, docs, infra, test
+#
+# Keep the subject concise, use the imperative mood, and omit the trailing period.
+# Add context and motivation below when the subject alone is not enough.
+
+
+# BREAKING CHANGE: describe the impact and migration path when applicable.

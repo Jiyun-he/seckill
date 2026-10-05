@@ -9,7 +9,6 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  *
  * @author jiyunhe
  */
-
 @SpringBootApplication
 @EnableScheduling
 public class HighConcurrencySeckillApplication {
@@ -17,5 +16,4 @@ public class HighConcurrencySeckillApplication {
     public static void main(String[] args) {
         SpringApplication.run(HighConcurrencySeckillApplication.class, args);
     }
-
 }

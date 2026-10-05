@@ -8,6 +8,7 @@ import com.example.seckill.entity.Goods;
 import com.example.seckill.mapper.GoodsMapper;
 import com.example.seckill.service.GoodsService;
 import com.example.seckill.vo.GoodsVO;
+
 import org.springframework.stereotype.Service;
 
 /**
@@ -15,7 +16,6 @@ import org.springframework.stereotype.Service;
  *
  * @author jiyunhe
  */
-
 @Service
 public class GoodsServiceImpl extends ServiceImpl<GoodsMapper, Goods> implements GoodsService {
     @Override

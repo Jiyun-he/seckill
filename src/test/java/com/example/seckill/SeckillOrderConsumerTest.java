@@ -1,15 +1,20 @@
 package com.example.seckill;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.example.seckill.entity.Order;
 import com.example.seckill.entity.SeckillGoods;
 import com.example.seckill.mapper.OrderMapper;
 import com.example.seckill.service.SeckillGoodsService;
 import com.example.seckill.service.SeckillOrderConsumer;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DuplicateKeyException;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -20,11 +25,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-
 /**
- * 秒杀订单 MQ 消费与数据库事务测试（#8~#11）。
+ * 秒杀订单 MQ 消费与数据库事务测试（#8~#12）。
  *
  * <p>验证核心数据库不变量：一个 orderNo 最多产生一条订单、DB 库存最多扣一次、
  * 事务不留下半完成状态。直接调用 {@code handleSeckillOrder}（绕过 MQ 投递），
@@ -41,12 +43,9 @@ class SeckillOrderConsumerTest extends AbstractIntegrationTest {
     private static final String STOCK_KEY = "seckill:stock:1:20260101000000";
     private static final String ORDERED_KEY = "seckill:ordered:1:20260101000000";
 
-    @Autowired
-    private SeckillOrderConsumer consumer;
-    @Autowired
-    private OrderMapper orderMapper;
-    @Autowired
-    private SeckillGoodsService seckillGoodsService;
+    @Autowired private SeckillOrderConsumer consumer;
+    @Autowired private OrderMapper orderMapper;
+    @Autowired private SeckillGoodsService seckillGoodsService;
 
     @Test
     void consume_正常消费落库并扣减库存() {
@@ -81,16 +80,18 @@ class SeckillOrderConsumerTest extends AbstractIntegrationTest {
         List<Future<?>> futures = new ArrayList<>();
         try {
             for (int i = 0; i < threads; i++) {
-                futures.add(pool.submit(() -> {
-                    ready.countDown();
-                    start.await();
-                    try {
-                        consumer.handleSeckillOrder(message);
-                    } catch (Exception ignored) {
-                        // 并发下第二个线程可能命中唯一索引冲突或幂等 return，最终以 DB 状态为准
-                    }
-                    return null;
-                }));
+                futures.add(
+                        pool.submit(
+                                () -> {
+                                    ready.countDown();
+                                    start.await();
+                                    try {
+                                        consumer.handleSeckillOrder(message);
+                                    } catch (Exception ignored) {
+                                        // 并发下第二个线程可能命中唯一索引冲突或幂等 return，最终以 DB 状态为准
+                                    }
+                                    return null;
+                                }));
             }
             ready.await();
             start.countDown();
@@ -103,6 +104,42 @@ class SeckillOrderConsumerTest extends AbstractIntegrationTest {
 
         assertThat(countOrders(orderNo)).isEqualTo(1L);
         assertThat(dbStock()).isEqualTo(49);
+    }
+
+    @Test
+    void consume_Redis查重失效时唯一索引兜底并归还第二笔预占() {
+        long firstOrderNo = 90005L;
+        long secondOrderNo = 90006L;
+
+        // 第一单正常落库（user 2001 + seckillGoods 1）
+        consumer.handleSeckillOrder(msg(firstOrderNo));
+        assertThat(countOrders(firstOrderNo)).isEqualTo(1L);
+        assertThat(dbStock()).isEqualTo(49);
+
+        // 模拟一人一单前两层失效（如 Redis 数据被误清）后用户再次下单：
+        // 第二笔预占已扣 Redis 库存、已记入已参与集合、状态为 PENDING，但没有任何订单落库
+        stringRedisTemplate.opsForValue().set(STOCK_KEY, "48");
+        stringRedisTemplate.opsForSet().add(ORDERED_KEY, String.valueOf(USER_ID));
+        seedOrder(secondOrderNo, "PENDING");
+
+        // 落库被唯一索引 uk_user_seckill (user_id, seckill_goods_id) 拒绝
+        assertThatThrownBy(() -> consumer.handleSeckillOrder(msg(secondOrderNo)))
+                .isInstanceOf(DuplicateKeyException.class);
+
+        // DB 侧：第一单不受影响，第二笔未落库，库存只扣过一次
+        assertThat(countOrders(firstOrderNo)).isEqualTo(1L);
+        assertThat(countOrders(secondOrderNo)).isZero();
+        assertThat(dbStock()).isEqualTo(49);
+
+        // 重试耗尽后进入死信补偿，第二笔预占被归还
+        consumer.handleDeadLetter(msg(secondOrderNo));
+
+        assertThat(stringRedisTemplate.opsForValue().get(STOCK_KEY)).isEqualTo("49");
+        assertThat(stringRedisTemplate.opsForSet().isMember(ORDERED_KEY, String.valueOf(USER_ID)))
+                .isFalse();
+        assertThat(statusOf(secondOrderNo)).isEqualTo("FAILED");
+        // 补偿不得波及第一单的终态
+        assertThat(statusOf(firstOrderNo)).isEqualTo("CONSUMED");
     }
 
     @Test
@@ -123,7 +160,8 @@ class SeckillOrderConsumerTest extends AbstractIntegrationTest {
         // Redis 校准为 DB 真实值、释放占位、标记失败
         assertThat(stringRedisTemplate.opsForValue().get(STOCK_KEY)).isEqualTo("0");
         assertThat(statusOf(orderNo)).isEqualTo("FAILED");
-        assertThat(stringRedisTemplate.opsForSet().isMember(ORDERED_KEY, String.valueOf(USER_ID))).isFalse();
+        assertThat(stringRedisTemplate.opsForSet().isMember(ORDERED_KEY, String.valueOf(USER_ID)))
+                .isFalse();
     }
 
     // ---- 辅助 ----
@@ -153,7 +191,8 @@ class SeckillOrderConsumerTest extends AbstractIntegrationTest {
     }
 
     private long countOrders(long orderNo) {
-        return orderMapper.selectCount(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
+        return orderMapper.selectCount(
+                new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
     }
 
     private int dbStock() {

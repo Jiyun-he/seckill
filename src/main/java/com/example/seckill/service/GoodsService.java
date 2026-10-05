@@ -1,7 +1,7 @@
 package com.example.seckill.service;
 
-import com.baomidou.mybatisplus.extension.service.IService;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.baomidou.mybatisplus.extension.service.IService;
 import com.example.seckill.entity.Goods;
 import com.example.seckill.vo.GoodsVO;
 
@@ -10,7 +10,6 @@ import com.example.seckill.vo.GoodsVO;
  *
  * @author jiyunhe
  */
-
 public interface GoodsService extends IService<Goods> {
 
     /**

@@ -8,7 +8,6 @@ import com.example.seckill.vo.OrderVO;
  *
  * @author jiyunhe
  */
-
 public class OrderConverter {
     public static OrderVO toVO(Order order) {
         if (order == null) {

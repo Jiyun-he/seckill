@@ -1,9 +1,9 @@
 package com.example.seckill;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * 冒烟测试：验证 Testcontainers 中间件 + Spring 上下文能正常启动，且秒杀库存预热到 Redis。

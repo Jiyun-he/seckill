@@ -25,6 +25,5 @@ public final class Failpoints {
     /** 消费者幂等检查（selectCount）之后、INSERT 订单之前，用于放大 check-then-act 窗口 */
     public static final String INSERT_BEFORE = "insert_before";
 
-    private Failpoints() {
-    }
+    private Failpoints() {}
 }

@@ -5,8 +5,10 @@ import com.example.seckill.common.SeckillOrderStatus;
 import com.example.seckill.entity.Order;
 import com.example.seckill.entity.SeckillGoods;
 import com.example.seckill.mapper.OrderMapper;
+
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
+
 import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -27,32 +29,33 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>当正常异常处理自身都未执行完（如 confirm 未确认、补偿中断、消费者崩溃），
  * 由本 Scanner 定时扫描中间态预占记录，以 MySQL 订单为最终业务事实，
- * 将悬挂交易收敛到 SUCCESS / FAILED，并做轻量库存对账。</p>
+ * 将悬挂交易收敛到 CONSUMED / FAILED，并做轻量库存对账。</p>
  *
  * @author jiyunhe
  */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class SeckillReconciliationScanner {
 
     private static final String ORDER_KEY_PREFIX = "seckill:order:";
     private static final String LOCK_KEY_PREFIX = "seckill:reconcile:lock:";
-    private static final DateTimeFormatter VERSION_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+    private static final DateTimeFormatter VERSION_FORMATTER =
+            DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+
     /** 中间态超时阈值：updatedAt 距今超过该值视为悬挂 */
     private static final long TIMEOUT_MS = 120_000L;
+
     /** 对账重投上限 */
     private static final int MAX_RETRY = 3;
+
     /** 抢占锁 TTL：防止实例崩溃后锁残留 */
     private static final long LOCK_TTL_SECONDS = 30L;
 
-    @Autowired
-    private StringRedisTemplate stringRedisTemplate;
-    @Autowired
-    private OrderMapper orderMapper;
-    @Autowired
-    private SeckillService seckillService;
-    @Autowired
-    private SeckillGoodsService seckillGoodsService;
+    private final StringRedisTemplate stringRedisTemplate;
+    private final OrderMapper orderMapper;
+    private final SeckillService seckillService;
+    private final SeckillGoodsService seckillGoodsService;
 
     private static final RedisScript<Long> COMPENSATE_LUA;
 
@@ -60,16 +63,15 @@ public class SeckillReconciliationScanner {
         DefaultRedisScript<Long> script = new DefaultRedisScript<>();
         script.setResultType(Long.class);
         script.setScriptText(
-                "local status = redis.call('hget', KEYS[3], 'status')\n" +
-                "if status == 'FAILED' or status == 'CONSUMED' then\n" +
-                "  return 0\n" +
-                "end\n" +
-                "redis.call('incr', KEYS[1])\n" +
-                "redis.call('srem', KEYS[2], ARGV[1])\n" +
-                "redis.call('hset', KEYS[3], 'status', 'FAILED', 'updatedAt', ARGV[2])\n" +
-                "redis.call('expire', KEYS[3], 86400)\n" +
-                "return 1\n"
-        );
+                "local status = redis.call('hget', KEYS[3], 'status')\n"
+                        + "if status == 'FAILED' or status == 'CONSUMED' then\n"
+                        + "  return 0\n"
+                        + "end\n"
+                        + "redis.call('incr', KEYS[1])\n"
+                        + "redis.call('srem', KEYS[2], ARGV[1])\n"
+                        + "redis.call('hset', KEYS[3], 'status', 'FAILED', 'updatedAt', ARGV[2])\n"
+                        + "redis.call('expire', KEYS[3], 86400)\n"
+                        + "return 1\n");
         COMPENSATE_LUA = script;
     }
 
@@ -79,7 +81,8 @@ public class SeckillReconciliationScanner {
     @Scheduled(fixedDelay = 30_000)
     public void scanReconcile() {
         long now = System.currentTimeMillis();
-        ScanOptions options = ScanOptions.scanOptions().match(ORDER_KEY_PREFIX + "*").count(100).build();
+        ScanOptions options =
+                ScanOptions.scanOptions().match(ORDER_KEY_PREFIX + "*").count(100).build();
         try (Cursor<String> cursor = stringRedisTemplate.scan(options)) {
             while (cursor.hasNext()) {
                 String key = cursor.next();
@@ -96,8 +99,11 @@ public class SeckillReconciliationScanner {
     private void reconcileOne(Long orderNo, long now) {
         String orderKey = ORDER_KEY_PREFIX + orderNo;
         // 安全抢占：两个实例不会同时恢复同一订单
-        Boolean locked = stringRedisTemplate.opsForValue()
-                .setIfAbsent(LOCK_KEY_PREFIX + orderNo, "1", LOCK_TTL_SECONDS, TimeUnit.SECONDS);
+        Boolean locked =
+                stringRedisTemplate
+                        .opsForValue()
+                        .setIfAbsent(
+                                LOCK_KEY_PREFIX + orderNo, "1", LOCK_TTL_SECONDS, TimeUnit.SECONDS);
         if (!Boolean.TRUE.equals(locked)) {
             return;
         }
@@ -116,17 +122,22 @@ public class SeckillReconciliationScanner {
             }
 
             // DB 是最终业务事实
-            Long count = orderMapper.selectCount(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
+            Long count =
+                    orderMapper.selectCount(
+                            new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
             if (count != null && count > 0) {
                 // 订单已成功落库，仅修正状态，禁止补偿
-                stringRedisTemplate.opsForHash().put(orderKey, "status", SeckillOrderStatus.CONSUMED.name());
+                stringRedisTemplate
+                        .opsForHash()
+                        .put(orderKey, "status", SeckillOrderStatus.CONSUMED.name());
                 stringRedisTemplate.opsForHash().put(orderKey, "updatedAt", String.valueOf(now));
                 log.info("对账：订单 {} 已落库，状态 {} -> CONSUMED", orderNo, statusObj);
                 return;
             }
 
             // 无订单：有限重投，耗尽则补偿
-            int retryCount = Integer.parseInt(String.valueOf(fields.getOrDefault("retryCount", "0")));
+            int retryCount =
+                    Integer.parseInt(String.valueOf(fields.getOrDefault("retryCount", "0")));
             Long userId = Long.valueOf(fields.get("userId").toString());
             Long seckillGoodsId = Long.valueOf(fields.get("seckillGoodsId").toString());
             String startTime = fields.get("startTime").toString();
@@ -136,11 +147,14 @@ public class SeckillReconciliationScanner {
                 seckillService.resendSeckillOrder(userId, seckillGoodsId, startTime, orderNo);
                 log.info("对账：订单 {} 状态 {} 重投，retryCount={}", orderNo, statusObj, retryCount + 1);
             } else {
-                stringRedisTemplate.execute(COMPENSATE_LUA,
-                        Arrays.asList("seckill:stock:" + seckillGoodsId + ":" + startTime,
-                                      "seckill:ordered:" + seckillGoodsId + ":" + startTime,
-                                      orderKey),
-                        userId.toString(), String.valueOf(now));
+                stringRedisTemplate.execute(
+                        COMPENSATE_LUA,
+                        Arrays.asList(
+                                "seckill:stock:" + seckillGoodsId + ":" + startTime,
+                                "seckill:ordered:" + seckillGoodsId + ":" + startTime,
+                                orderKey),
+                        userId.toString(),
+                        String.valueOf(now));
                 log.info("对账：订单 {} 重试耗尽，补偿 FAILED", orderNo);
             }
         } finally {
@@ -160,7 +174,8 @@ public class SeckillReconciliationScanner {
     public void reconcileStock() {
         // 1. 统计每个商品的活跃预占数（中间态订单：Redis 已扣但 DB 未扣）
         Map<Long, Integer> activeByGoods = new HashMap<>();
-        ScanOptions options = ScanOptions.scanOptions().match(ORDER_KEY_PREFIX + "*").count(100).build();
+        ScanOptions options =
+                ScanOptions.scanOptions().match(ORDER_KEY_PREFIX + "*").count(100).build();
         try (Cursor<String> cursor = stringRedisTemplate.scan(options)) {
             while (cursor.hasNext()) {
                 String key = cursor.next();
@@ -178,7 +193,8 @@ public class SeckillReconciliationScanner {
         // 2. 期望 Redis = DB stock - active reservations，超卖侧校准
         List<SeckillGoods> goods = seckillGoodsService.list();
         for (SeckillGoods g : goods) {
-            String stockKey = "seckill:stock:" + g.getId() + ":" + g.getStartTime().format(VERSION_FORMATTER);
+            String stockKey =
+                    "seckill:stock:" + g.getId() + ":" + g.getStartTime().format(VERSION_FORMATTER);
             String redisStockStr = stringRedisTemplate.opsForValue().get(stockKey);
             if (redisStockStr == null) {
                 continue;
@@ -188,8 +204,16 @@ public class SeckillReconciliationScanner {
             int active = activeByGoods.getOrDefault(g.getId(), 0);
             int expected = dbStock - active;
             if (redisStock > expected) {
-                log.warn("库存对账：商品 {} Redis={} > DB={} - active={} = {}，按期望值校准", g.getId(), redisStock, dbStock, active, expected);
-                stringRedisTemplate.opsForValue().set(stockKey, String.valueOf(Math.max(expected, 0)));
+                log.warn(
+                        "库存对账：商品 {} Redis={} > DB={} - active={} = {}，按期望值校准",
+                        g.getId(),
+                        redisStock,
+                        dbStock,
+                        active,
+                        expected);
+                stringRedisTemplate
+                        .opsForValue()
+                        .set(stockKey, String.valueOf(Math.max(expected, 0)));
             }
         }
     }

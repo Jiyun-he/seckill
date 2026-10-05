@@ -56,7 +56,7 @@ com.example.seckill
 | `config` | Redis、RabbitMQ、MyBatis-Plus、登录拦截器与 OpenAPI 配置 |
 | `common` | 统一响应结构、全局异常处理、订单状态枚举 |
 | `fault` | 故障注入埋点（Failpoint），仅在 `fault-test` profile 下生效 |
-| `util` / `utils` | 雪花 ID 生成、JWT 生成与校验 |
+| `util` | 雪花 ID 生成、JWT 生成与校验 |
 
 ## 核心组件
 
@@ -69,7 +69,7 @@ com.example.seckill
 | `SeckillReconciliationScanner` | 定时任务 | 扫描中间态预占记录，按 DB 权威重投或补偿；轻量库存对账 |
 | `SnowflakeIdUtil` | 工具 | 雪花算法生成订单号 |
 | `JwtUtil` | 工具 | JWT 生成、解析、校验 |
-| `RabbitMqConfig` | 配置 | 交换机、队列、死信队列、重试拦截器、confirm / return 回调 |
+| `RabbitMQConfiguration` | 配置 | 交换机、队列、死信队列、重试拦截器、confirm / return 回调 |
 
 ## 认证链路
 

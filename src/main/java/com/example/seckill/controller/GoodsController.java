@@ -5,45 +5,52 @@ import com.example.seckill.common.BusinessException;
 import com.example.seckill.common.Result;
 import com.example.seckill.service.GoodsService;
 import com.example.seckill.vo.GoodsVO;
+
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import org.springframework.beans.factory.annotation.Autowired;
+
+import lombok.RequiredArgsConstructor;
+
 import org.springframework.http.HttpStatus;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 商品查询接口。
  *
  * @author jiyunhe
  */
-
 @RestController
 @RequestMapping("/goods")
 @Tag(name = "商品")
 @SecurityRequirement(name = "bearerAuth")
+@RequiredArgsConstructor
 public class GoodsController {
 
-    @Autowired
-    private GoodsService goodsService;
+    private final GoodsService goodsService;
 
     @GetMapping("/list")
     @Operation(summary = "分页查询商品列表", description = "支持按关键字模糊搜索商品名称")
     public Result<Page<GoodsVO>> list(
-            @Parameter(description = "页码，从 1 开始", example = "1")
-            @RequestParam(defaultValue = "1") Integer page,
-            @Parameter(description = "每页条数", example = "10")
-            @RequestParam(defaultValue = "10") Integer size,
+            @Parameter(description = "页码，从 1 开始", example = "1") @RequestParam(defaultValue = "1")
+                    Integer page,
+            @Parameter(description = "每页条数", example = "10") @RequestParam(defaultValue = "10")
+                    Integer size,
             @Parameter(description = "关键字（商品名称模糊匹配）", example = "iPhone")
-            @RequestParam(required = false) String keyword
-    ) {
+                    @RequestParam(required = false)
+                    String keyword) {
         return Result.success(goodsService.listGoods(page, size, keyword));
     }
 
     @GetMapping("/{id}")
     @Operation(summary = "查询商品详情")
-    public Result<GoodsVO> detail(@Parameter(description = "商品ID", required = true) @PathVariable Long id) {
+    public Result<GoodsVO> detail(
+            @Parameter(description = "商品ID", required = true) @PathVariable Long id) {
         GoodsVO goods = goodsService.getGoodsDetail(id);
         if (goods == null) {
             throw new BusinessException(HttpStatus.NOT_FOUND, "商品不存在");

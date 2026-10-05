@@ -1,9 +1,9 @@
 package com.example.seckill;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * 活动版本 / 库存初始化测试（#20）。

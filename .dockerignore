@@ -1,9 +1,11 @@
-#target
+target
 .git
+.github
 .idea
 .vscode
+.env
+docs
+test
 *.log
-Dockerfile*
-compose*
 HELP.md
 agent.md

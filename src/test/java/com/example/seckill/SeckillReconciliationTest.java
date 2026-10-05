@@ -1,11 +1,15 @@
 package com.example.seckill;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+
 import com.example.seckill.entity.Order;
-import com.example.seckill.entity.SeckillGoods;
 import com.example.seckill.mapper.OrderMapper;
 import com.example.seckill.service.SeckillGoodsService;
 import com.example.seckill.service.SeckillReconciliationScanner;
+
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentMatchers;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
@@ -17,11 +21,6 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.Map;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
 
 /**
  * 异常交易扫描与对账恢复测试（#13~#17）。
@@ -40,18 +39,15 @@ class SeckillReconciliationTest extends AbstractIntegrationTest {
     private static final String VERSION = "20260101000000";
     private static final String STOCK_KEY = "seckill:stock:1:20260101000000";
     private static final String ORDERED_KEY = "seckill:ordered:1:20260101000000";
+
     /** 极旧的 updatedAt，确保被视为悬挂（超过 120s 阈值） */
     private static final long STALE_UPDATED_AT = 0L;
 
-    @Autowired
-    private SeckillReconciliationScanner scanner;
-    @Autowired
-    private OrderMapper orderMapper;
-    @Autowired
-    private SeckillGoodsService seckillGoodsService;
+    @Autowired private SeckillReconciliationScanner scanner;
+    @Autowired private OrderMapper orderMapper;
+    @Autowired private SeckillGoodsService seckillGoodsService;
 
-    @MockitoBean
-    private RabbitTemplate rabbitTemplate;
+    @MockitoBean private RabbitTemplate rabbitTemplate;
 
     @Test
     void reconcile_悬挂且DB已有订单修正为已消费且不补偿() {
@@ -66,7 +62,8 @@ class SeckillReconciliationTest extends AbstractIntegrationTest {
         assertThat(statusOf(orderNo)).isEqualTo("CONSUMED");
         // 绝不补偿：库存不变、占位不释放
         assertThat(stringRedisTemplate.opsForValue().get(STOCK_KEY)).isEqualTo("10");
-        assertThat(stringRedisTemplate.opsForSet().isMember(ORDERED_KEY, String.valueOf(USER_ID))).isTrue();
+        assertThat(stringRedisTemplate.opsForSet().isMember(ORDERED_KEY, String.valueOf(USER_ID)))
+                .isTrue();
     }
 
     @Test
@@ -77,11 +74,12 @@ class SeckillReconciliationTest extends AbstractIntegrationTest {
         scanner.scanReconcile();
 
         assertThat(retryCountOf(orderNo)).isEqualTo("1");
-        verify(rabbitTemplate, times(1)).convertAndSend(
-                ArgumentMatchers.eq("seckill.exchange"),
-                ArgumentMatchers.eq("seckill.order"),
-                ArgumentMatchers.any(Map.class),
-                ArgumentMatchers.any(CorrelationData.class));
+        verify(rabbitTemplate, times(1))
+                .convertAndSend(
+                        ArgumentMatchers.eq("seckill.exchange"),
+                        ArgumentMatchers.eq("seckill.order"),
+                        ArgumentMatchers.any(Map.class),
+                        ArgumentMatchers.any(CorrelationData.class));
     }
 
     @Test
@@ -94,7 +92,8 @@ class SeckillReconciliationTest extends AbstractIntegrationTest {
         scanner.scanReconcile();
 
         assertThat(stringRedisTemplate.opsForValue().get(STOCK_KEY)).isEqualTo("11");
-        assertThat(stringRedisTemplate.opsForSet().isMember(ORDERED_KEY, String.valueOf(USER_ID))).isFalse();
+        assertThat(stringRedisTemplate.opsForSet().isMember(ORDERED_KEY, String.valueOf(USER_ID)))
+                .isFalse();
         assertThat(statusOf(orderNo)).isEqualTo("FAILED");
     }
 
@@ -111,8 +110,12 @@ class SeckillReconciliationTest extends AbstractIntegrationTest {
         assertThat(statusOf(failedNo)).isEqualTo("FAILED");
         assertThat(statusOf(consumedNo)).isEqualTo("CONSUMED");
         assertThat(stringRedisTemplate.opsForValue().get(STOCK_KEY)).isEqualTo("10");
-        verify(rabbitTemplate, never()).convertAndSend(
-                ArgumentMatchers.anyString(), ArgumentMatchers.anyString(), ArgumentMatchers.any(Map.class), ArgumentMatchers.any(CorrelationData.class));
+        verify(rabbitTemplate, never())
+                .convertAndSend(
+                        ArgumentMatchers.anyString(),
+                        ArgumentMatchers.anyString(),
+                        ArgumentMatchers.any(Map.class),
+                        ArgumentMatchers.any(CorrelationData.class));
     }
 
     @Test
@@ -157,6 +160,7 @@ class SeckillReconciliationTest extends AbstractIntegrationTest {
     }
 
     private String retryCountOf(long orderNo) {
-        return (String) stringRedisTemplate.opsForHash().get("seckill:order:" + orderNo, "retryCount");
+        return (String)
+                stringRedisTemplate.opsForHash().get("seckill:order:" + orderNo, "retryCount");
     }
 }

@@ -9,25 +9,34 @@
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
     <groupId>com.example</groupId>
-    <artifactId>High_concurrency_seckill</artifactId>
+    <artifactId>high-concurrency-seckill</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>High_concurrency_seckill</name>
-    <description>High_concurrency_seckill</description>
-    <url/>
+    <name>High Concurrency Seckill</name>
+    <description>A high-concurrency flash-sale service built with Redis, RabbitMQ, and MySQL.</description>
+    <url>https://github.com/Jiyun-he/seckill</url>
     <licenses>
-        <license/>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
     </licenses>
     <developers>
-        <developer/>
+        <developer>
+            <id>Jiyun-he</id>
+            <url>https://github.com/Jiyun-he</url>
+        </developer>
     </developers>
     <scm>
-        <connection/>
-        <developerConnection/>
-        <tag/>
-        <url/>
+        <connection>scm:git:https://github.com/Jiyun-he/seckill.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/Jiyun-he/seckill.git</developerConnection>
+        <tag>HEAD</tag>
+        <url>https://github.com/Jiyun-he/seckill</url>
     </scm>
     <properties>
         <java.version>17</java.version>
+        <spotless-maven-plugin.version>3.9.0</spotless-maven-plugin.version>
+        <google-java-format.version>1.28.0</google-java-format.version>
         <!-- Testcontainers 2.x 内置 docker-java 3.5+，支持 Docker Desktop 4.x 的 npipe 重定向协议 -->
         <testcontainers.version>2.0.4</testcontainers.version>
     </properties>
@@ -48,11 +57,6 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
-<!--        <dependency>-->
-<!--            <groupId>org.mybatis.spring.boot</groupId>-->
-<!--            <artifactId>mybatis-spring-boot-starter</artifactId>-->
-<!--            <version>4.0.1</version>-->
-<!--        </dependency>-->
         <dependency>
             <groupId>com.baomidou</groupId>
             <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
@@ -93,12 +97,6 @@
             <artifactId>testcontainers-rabbitmq</artifactId>
             <scope>test</scope>
         </dependency>
-<!--        <dependency>-->
-<!--            <groupId>org.mybatis.spring.boot</groupId>-->
-<!--            <artifactId>mybatis-spring-boot-starter-test</artifactId>-->
-<!--            <version>4.0.1</version>-->
-<!--            <scope>test</scope>-->
-<!--        </dependency>-->
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
             <artifactId>jjwt-api</artifactId>
@@ -138,6 +136,34 @@
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>com.diffplug.spotless</groupId>
+                <artifactId>spotless-maven-plugin</artifactId>
+                <version>${spotless-maven-plugin.version}</version>
+                <configuration>
+                    <java>
+                        <removeUnusedImports/>
+                        <forbidWildcardImports/>
+                        <googleJavaFormat>
+                            <version>${google-java-format.version}</version>
+                            <style>AOSP</style>
+                            <reorderImports>true</reorderImports>
+                            <formatJavadoc>false</formatJavadoc>
+                        </googleJavaFormat>
+                        <trimTrailingWhitespace/>
+                        <endWithNewline/>
+                    </java>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>spotless-check</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>

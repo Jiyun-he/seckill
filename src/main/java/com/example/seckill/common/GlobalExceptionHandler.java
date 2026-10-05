@@ -1,6 +1,7 @@
 package com.example.seckill.common;
 
 import lombok.extern.slf4j.Slf4j;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -12,7 +13,6 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  *
  * @author clanguagetrainee
  */
-
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -22,10 +22,11 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<Result<Void>> handleValidException(MethodArgumentNotValidException e) {
-        String msg = e.getBindingResult().getFieldErrors().stream()
-                .findFirst()
-                .map(f -> f.getField() + f.getDefaultMessage())
-                .orElse("参数校验失败");
+        String msg =
+                e.getBindingResult().getFieldErrors().stream()
+                        .findFirst()
+                        .map(f -> f.getField() + f.getDefaultMessage())
+                        .orElse("参数校验失败");
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(Result.error(HttpStatus.BAD_REQUEST.value(), msg));
     }
@@ -36,8 +37,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<Result<Void>> handleBusinessException(BusinessException e) {
         HttpStatus status = e.getStatus();
-        return ResponseEntity.status(status)
-                .body(Result.error(status.value(), e.getMessage()));
+        return ResponseEntity.status(status).body(Result.error(status.value(), e.getMessage()));
     }
 
     /**

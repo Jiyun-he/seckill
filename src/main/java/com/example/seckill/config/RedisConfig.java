@@ -4,6 +4,7 @@ import com.example.seckill.entity.SeckillGoods;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
@@ -16,7 +17,6 @@ import org.springframework.data.redis.serializer.StringRedisSerializer;
  *
  * @author jiyunhe
  */
-
 @Configuration
 public class RedisConfig {
     @Bean
@@ -32,10 +32,9 @@ public class RedisConfig {
 
         // 设置序列化方式
         Jackson2JsonRedisSerializer<SeckillGoods> serializer =
-                new Jackson2JsonRedisSerializer<>(SeckillGoods.class);
-        serializer.setObjectMapper(objectMapper);
+                new Jackson2JsonRedisSerializer<>(objectMapper, SeckillGoods.class);
 
-        // 设置Redis的key/value的序列化器
+        // 设置 Redis key/value 的序列化器
         template.setKeySerializer(new StringRedisSerializer());
         template.setValueSerializer(serializer);
         return template;

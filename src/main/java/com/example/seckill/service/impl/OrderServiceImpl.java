@@ -9,31 +9,28 @@ import com.example.seckill.entity.Order;
 import com.example.seckill.mapper.OrderMapper;
 import com.example.seckill.service.GoodsService;
 import com.example.seckill.service.OrderService;
+import com.example.seckill.util.SnowflakeIdUtil;
 import com.example.seckill.vo.OrderVO;
-import org.springframework.beans.factory.annotation.Autowired;
+
+import lombok.RequiredArgsConstructor;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.example.seckill.util.SnowflakeIdUtil;
-
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 
 /**
  * 订单服务实现。
  *
  * @author jiyunhe
  */
-
 @Service
+@RequiredArgsConstructor
 public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements OrderService {
 
-    @Autowired
-    private GoodsService goodsService;
-
-    @Autowired
-    private SnowflakeIdUtil snowflakeIdUtil;
+    private final GoodsService goodsService;
+    private final SnowflakeIdUtil snowflakeIdUtil;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -48,10 +45,12 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         }
 
         // 2. 扣减库存（使用乐观锁，避免超卖）
-        boolean updated = goodsService.update(new LambdaUpdateWrapper<Goods>()
-                .eq(Goods::getId, goodsId)
-                .ge(Goods::getStock, quantity)
-                .setSql("stock = stock - " + quantity));
+        boolean updated =
+                goodsService.update(
+                        new LambdaUpdateWrapper<Goods>()
+                                .eq(Goods::getId, goodsId)
+                                .ge(Goods::getStock, quantity)
+                                .setSql("stock = stock - " + quantity));
         if (!updated) {
             throw new BusinessException(HttpStatus.CONFLICT, "库存不足");
         }

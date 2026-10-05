@@ -8,7 +8,6 @@ import com.example.seckill.vo.GoodsVO;
  *
  * @author jiyunhe
  */
-
 public class GoodsConverter {
     public static GoodsVO toVO(Goods goods) {
         if (goods == null) {

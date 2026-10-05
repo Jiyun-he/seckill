@@ -29,6 +29,7 @@ public enum SeckillOrderStatus {
 
     /** 中间态（PENDING/CONFIRMED）Redis 保留时长（秒），超时由对账框架兜底 */
     public static final long INTERMEDIATE_TTL_SECONDS = 3600L;
+
     /** 终态（FAILED/CONSUMED）Redis 保留时长（秒），保证用户有可查询窗口 */
     public static final long FINAL_TTL_SECONDS = 86400L;
 

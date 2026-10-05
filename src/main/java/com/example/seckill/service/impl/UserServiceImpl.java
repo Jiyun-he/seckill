@@ -6,8 +6,10 @@ import com.example.seckill.common.BusinessException;
 import com.example.seckill.entity.User;
 import com.example.seckill.mapper.UserMapper;
 import com.example.seckill.service.UserService;
-import com.example.seckill.utils.JwtUtil;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.example.seckill.util.JwtUtil;
+
+import lombok.RequiredArgsConstructor;
+
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -20,15 +22,12 @@ import java.util.concurrent.TimeUnit;
  *
  * @author jiyunhe
  */
-
 @Service
+@RequiredArgsConstructor
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements UserService {
 
-    @Autowired
-    private JwtUtil jwtUtil;
-
-    @Autowired
-    private RedisTemplate<String, String> redisTemplate;
+    private final JwtUtil jwtUtil;
+    private final RedisTemplate<String, String> redisTemplate;
 
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
@@ -46,7 +45,13 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         this.save(user);
         // 注册成功后生成token并存入Redis
         String token = jwtUtil.generateToken(user.getId());
-        redisTemplate.opsForValue().set("token:" + user.getId(), token, jwtUtil.getExpiration(), TimeUnit.MILLISECONDS);
+        redisTemplate
+                .opsForValue()
+                .set(
+                        "token:" + user.getId(),
+                        token,
+                        jwtUtil.getExpiration(),
+                        TimeUnit.MILLISECONDS);
         return token;
     }
 
@@ -61,7 +66,13 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         // 生成token
         String token = jwtUtil.generateToken(user.getId());
         // 存储到Redis，key: "token:userId"，value: token，设置过期时间（与JWT过期时间一致）
-        redisTemplate.opsForValue().set("token:" + user.getId(), token, jwtUtil.getExpiration(), TimeUnit.MILLISECONDS);
+        redisTemplate
+                .opsForValue()
+                .set(
+                        "token:" + user.getId(),
+                        token,
+                        jwtUtil.getExpiration(),
+                        TimeUnit.MILLISECONDS);
         return token;
     }
 }

@@ -1,6 +1,7 @@
 package com.example.seckill;
 
 import com.example.seckill.service.SeckillService;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
@@ -9,12 +10,14 @@ import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.MySQLContainer;
-import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.mysql.MySQLContainer;
+import org.testcontainers.rabbitmq.RabbitMQContainer;
+import org.testcontainers.utility.DockerImageName;
+
+import java.sql.Connection;
 
 import javax.sql.DataSource;
-import java.sql.Connection;
 
 /**
  * 集成测试基类：以 Testcontainers 拉起隔离的 MySQL / Redis / RabbitMQ，并保证每个用例
@@ -30,37 +33,49 @@ import java.sql.Connection;
  */
 public abstract class AbstractIntegrationTest {
 
-    static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.0")
-            .withDatabaseName("seckill_db")
-            .withUsername("root")
-            .withPassword("123456")
-            .withInitScript("db/init.sql");
+    static final MySQLContainer MYSQL =
+            new MySQLContainer(DockerImageName.parse("mysql:8.0"))
+                    .withDatabaseName("seckill_db")
+                    .withUsername("root")
+                    .withPassword("123456")
+                    .withInitScript("db/init.sql");
 
-    static final GenericContainer<?> REDIS = new GenericContainer<>("redis:6")
-            .withExposedPorts(6379)
-            .waitingFor(Wait.forLogMessage(".*Ready to accept connections.*", 1));
+    static final GenericContainer<?> REDIS =
+            new GenericContainer<>(DockerImageName.parse("redis:6"))
+                    .withExposedPorts(6379)
+                    .waitingFor(Wait.forLogMessage(".*Ready to accept connections.*", 1));
 
-    static final RabbitMQContainer RABBITMQ = new RabbitMQContainer("rabbitmq:management")
-            // withUser 会通过 configure() 设置 RABBITMQ_DEFAULT_USER/PASS 真正建用户；
-            // RabbitMQ 4.x 下其 rabbitmqadmin 校验命令会报错，但属冗余噪音，用户已由 env 创建，可忽略
-            .withUser("seckill", "seckill123");
+    static final RabbitMQContainer RABBITMQ =
+            new RabbitMQContainer(DockerImageName.parse("rabbitmq:management"))
+                    // Admin 配置会设置 RABBITMQ_DEFAULT_USER/PASS 并创建用户；
+                    // RabbitMQ 4.x 下其 rabbitmqadmin 校验命令会报错，但属冗余噪音，用户已由 env 创建，可忽略
+                    .withAdminUser("seckill")
+                    .withAdminPassword("seckill123");
 
     static {
         MYSQL.start();
         REDIS.start();
         RABBITMQ.start();
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            RABBITMQ.stop();
-            REDIS.stop();
-            MYSQL.stop();
-        }));
+        Runtime.getRuntime()
+                .addShutdownHook(
+                        new Thread(
+                                () -> {
+                                    RABBITMQ.stop();
+                                    REDIS.stop();
+                                    MYSQL.stop();
+                                }));
     }
 
     @DynamicPropertySource
     static void registerProps(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", () ->
-                "jdbc:mysql://" + MYSQL.getHost() + ":" + MYSQL.getMappedPort(3306)
-                        + "/seckill_db?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true");
+        registry.add(
+                "spring.datasource.url",
+                () ->
+                        "jdbc:mysql://"
+                                + MYSQL.getHost()
+                                + ":"
+                                + MYSQL.getMappedPort(3306)
+                                + "/seckill_db?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true");
         registry.add("spring.datasource.username", MYSQL::getUsername);
         registry.add("spring.datasource.password", MYSQL::getPassword);
 
@@ -74,12 +89,9 @@ public abstract class AbstractIntegrationTest {
         registry.add("spring.rabbitmq.virtual-host", () -> "/");
     }
 
-    @Autowired
-    protected StringRedisTemplate stringRedisTemplate;
-    @Autowired
-    protected DataSource dataSource;
-    @Autowired
-    protected SeckillService seckillService;
+    @Autowired protected StringRedisTemplate stringRedisTemplate;
+    @Autowired protected DataSource dataSource;
+    @Autowired protected SeckillService seckillService;
 
     /**
      * 每个用例前：清空 Redis、重建数据库 schema 与种子数据、重新预热秒杀库存到 Redis，

@@ -160,14 +160,14 @@ Hash 的 TTL 按状态分两档：中间态（PENDING / CONFIRMED）保留 3600 
 
 | 配置项 | 值 | 定义位置 |
 | --- | --- | --- |
-| 交换机 | `seckill.exchange`（Direct，durable） | `RabbitMqConfig#SECKILL_EXCHANGE` |
-| 队列 | `seckill.queue`（durable，绑定 DLX） | `RabbitMqConfig#SECKILL_QUEUE` |
-| 路由键 | `seckill.order` | `RabbitMqConfig#SECKILL_ROUTING_KEY` |
-| 死信交换机 | `seckill.dlx`（Direct，durable） | `RabbitMqConfig#SECKILL_DLX` |
-| 死信队列 | `seckill.queue.dlq`（durable） | `RabbitMqConfig#SECKILL_DLQ` |
-| 消费端重试 | 最多 3 次，退避 1s / 2s / 4s | `RabbitMqConfig#retryInterceptor` |
+| 交换机 | `seckill.exchange`（Direct，durable） | `RabbitMQConfiguration#SECKILL_EXCHANGE` |
+| 队列 | `seckill.queue`（durable，绑定 DLX） | `RabbitMQConfiguration#SECKILL_QUEUE` |
+| 路由键 | `seckill.order` | `RabbitMQConfiguration#SECKILL_ROUTING_KEY` |
+| 死信交换机 | `seckill.dlx`（Direct，durable） | `RabbitMQConfiguration#SECKILL_DLX` |
+| 死信队列 | `seckill.queue.dlq`（durable） | `RabbitMQConfiguration#SECKILL_DLQ` |
+| 消费端重试 | 最多 3 次，退避 1s / 2s / 4s | `RabbitMQConfiguration#retryInterceptor` |
 | 重试耗尽策略 | `RejectAndDontRequeueRecoverer` → 进入 DLQ | 同上 |
-| 消费并发 | 默认 2，由 `SEKKILL_CONSUMER_CONCURRENCY` 控制 | `RabbitMqConfig#rabbitListenerContainerFactory` |
+| 消费并发 | 默认 2，由 `SECKILL_CONSUMER_CONCURRENCY` 控制 | `RabbitMQConfiguration#rabbitListenerContainerFactory` |
 | 生产者确认 | `publisher-confirm-type: correlated`，`publisher-returns: true`，`mandatory: true` | `application.yml` |
 
 消息体为 JSON，包含 `userId`、`seckillGoodsId`、`orderNo`、`startTime` 四个字段。其中 `startTime` 是活动版本标识，让消费者与死信消费者能够还原出带版本的库存 key。
