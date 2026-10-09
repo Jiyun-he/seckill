@@ -64,9 +64,11 @@ com.example.seckill
 | --- | --- | --- |
 | `LoginInterceptor` | 拦截器 | 校验 JWT 与 Redis 登录态，将 `userId` 注入 request attribute |
 | `SeckillController` | 控制器 | 秒杀商品详情、执行秒杀、订单状态查询 |
-| `SeckillServiceImpl` | 服务 | 库存预热、活动时间校验、Lua 原子预占、消息投递与 confirm 回调补偿 |
-| `SeckillOrderConsumer` | MQ 消费者 | 异步落库与扣减 MySQL 库存；死信队列补偿 |
-| `SeckillReconciliationScanner` | 定时任务 | 扫描中间态预占记录，按 DB 权威重投或补偿；轻量库存对账 |
+| `SeckillServiceImpl` | 服务 | 库存预热、活动时间校验、Lua 原子预占、消息投递与 confirm 回调 |
+| `SeckillOrderConsumer` | MQ 消费者 | 在商品行锁保护下异步落库；将死信交给补偿协调器裁决 |
+| `SeckillCompensationService` | 协调服务 | 统一处理明确投递失败、DLQ 与对账耗尽；加锁后二次核对 DB 再决定补偿 |
+| `SeckillOrderStateStore` | Redis 组件 | 用严格 Lua CAS 维护确认、消费、补偿和校准状态，阻止终态互相覆盖 |
+| `SeckillReconciliationScanner` | 定时任务 | 扫描中间态预占记录，按 DB 权威重投或提交补偿裁决；轻量库存对账 |
 | `SnowflakeIdUtil` | 工具 | 雪花算法生成订单号 |
 | `JwtUtil` | 工具 | JWT 生成、解析、校验 |
 | `RabbitMQConfiguration` | 配置 | 交换机、队列、死信队列、重试拦截器、confirm / return 回调 |
@@ -131,11 +133,11 @@ MySQL 条件更新扣减库存（stock >= quantity）
      ↓
 立即返回订单号
      ↓
-消费者异步落库并扣减 MySQL 秒杀库存
+消费者锁定 `seckill_goods` 行，二次检查 DB 订单与 Redis 状态后落库
      ↓
-事务提交后状态置为 CONSUMED
+事务提交后通过 Lua CAS 将中间态置为 CONSUMED
      ↓
-消费失败 → 重试；重试耗尽 → 死信队列幂等补偿
+消费失败 → 重试；重试耗尽 → DLQ 提交加锁补偿裁决
      ↓
 confirm 未确认（nack / 回音丢失）→ 状态保持 PENDING，由对账 Scanner 兜底重投
 ```

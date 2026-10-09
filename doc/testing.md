@@ -23,14 +23,15 @@
 
 ### 用例分布
 
-共 32 个用例：
+共 37 个用例：
 
 | 测试类 | 用例数 | 覆盖内容 |
 | --- | ---: | --- |
-| `SeckillLuaTest` | 10 | Lua 原子预占的正常 / 重复用户 / 库存为 0 / 活动未开始 / 活动已结束；补偿的正常恢复与重复补偿幂等；状态机终态权威（PENDING 升 CONFIRMED、CONSUMED 与 FAILED 不被晚到回调覆盖） |
+| `SeckillLuaTest` | 11 | Lua 原子预占的正常 / 重复用户 / 库存为 0 / 活动未开始 / 活动已结束；补偿的正常恢复与重复补偿幂等；严格状态 CAS（包括 `afterCommit` 不得用 CONSUMED 覆盖 FAILED） |
 | `SeckillConfirmCallbackTest` | 3 | confirm 回调的补偿边界：ack 置 `CONFIRMED`；nack 不补偿、库存与占位保持、状态停留 `PENDING`；消息无法路由立即补偿并置 `FAILED` |
 | `SeckillReconciliationTest` | 5 | 对账收敛：悬挂且 DB 已有订单 → 修正且不补偿；悬挂且无订单 → 未耗尽重投并累加 retryCount；耗尽 → 补偿；终态不重复处理；库存对账按 DB 校准 |
 | `SeckillOrderConsumerTest` | 5 | 消费落库、重复消费幂等、并发重复消费、一人一单前两层失效时唯一索引兜底与第二笔预占归还、DB 库存不足时的漂移校准 |
+| `SeckillCompensationConcurrencyTest` | 4 | 消费先持锁、补偿先持锁、SQL 已提交但状态未写、提交后状态写回崩溃四个确定性窗口 |
 | `HttpSemanticsTest` | 3 | HTTP 异常语义：404 / 409 / 500 |
 | `SeckillStockInitTest` | 2 | 启动预热写入带活动版本的库存与活动时间；清理旧版僵尸 key |
 | `SnowflakeIdUtilTest` | 2 | 批量生成无重复、不同 workerId 不碰撞 |
@@ -58,6 +59,9 @@
 | --- | --- | --- |
 | `preoccupy_after` | Redis 预占之后、发送 MQ 之前 | 进程在预占与投递之间崩溃 |
 | `publish_after` | 消息 publish 之后、confirm 回调返回之前 | 投递结果未知 |
+| `consume_locked` | 消费者取得商品行锁之后 | 消费事务占有协调锁时补偿并发进入 |
+| `compensate_locked` | 补偿取得商品行锁之后 | 最终补偿完成前晚到消费者并发进入 |
+| `commit_before_status` | SQL 提交之后、Redis 状态写回之前 | 订单已落库但状态仍是中间态，或状态写回进程崩溃 |
 | `commit_after` | 消费者事务提交之后、ACK 之前 | 已落库但未 ACK |
 | `compensate_after` | 死信补偿之后、ACK 之前 | 补偿后崩溃导致重复消费 |
 | `insert_before` | 消费者幂等检查之后、INSERT 之前 | 放大 check-then-act 窗口 |

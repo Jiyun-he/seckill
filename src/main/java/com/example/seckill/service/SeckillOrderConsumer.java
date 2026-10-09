@@ -1,6 +1,5 @@
 package com.example.seckill.service;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.seckill.common.SeckillOrderStatus;
 import com.example.seckill.config.RabbitMQConfiguration;
@@ -10,23 +9,19 @@ import com.example.seckill.entity.SeckillGoods;
 import com.example.seckill.fault.FailpointService;
 import com.example.seckill.fault.Failpoints;
 import com.example.seckill.mapper.OrderMapper;
+import com.example.seckill.mapper.SeckillGoodsMapper;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
-import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import java.util.Arrays;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 /**
  * 秒杀订单 MQ 消费者，落库与死信补偿。
@@ -39,39 +34,12 @@ import java.util.concurrent.TimeUnit;
 public class SeckillOrderConsumer {
 
     private final OrderMapper orderMapper;
+    private final SeckillGoodsMapper seckillGoodsMapper;
     private final SeckillGoodsService seckillGoodsService;
     private final GoodsService goodsService;
-    private final StringRedisTemplate stringRedisTemplate;
+    private final SeckillOrderStateStore orderStateStore;
+    private final SeckillCompensationService compensationService;
     private final FailpointService failpointService;
-
-    private static final RedisScript<Long> COMPENSATE_LUA;
-    private static final RedisScript<Long> CALIBRATE_LUA;
-
-    static {
-        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
-        script.setResultType(Long.class);
-        script.setScriptText(
-                "local status = redis.call('hget', KEYS[3], 'status')\n"
-                        + "if status == 'FAILED' or status == 'CONSUMED' then\n"
-                        + "  return 0\n"
-                        + "end\n"
-                        + "redis.call('incr', KEYS[1])\n"
-                        + "redis.call('srem', KEYS[2], ARGV[1])\n"
-                        + "redis.call('hset', KEYS[3], 'status', 'FAILED', 'updatedAt', ARGV[2])\n"
-                        + "redis.call('expire', KEYS[3], 86400)\n"
-                        + "return 1\n");
-        COMPENSATE_LUA = script;
-
-        DefaultRedisScript<Long> calibrateScript = new DefaultRedisScript<>();
-        calibrateScript.setResultType(Long.class);
-        calibrateScript.setScriptText(
-                "redis.call('set', KEYS[1], ARGV[2])\n"
-                        + "redis.call('srem', KEYS[2], ARGV[1])\n"
-                        + "redis.call('hset', KEYS[3], 'status', 'FAILED', 'updatedAt', ARGV[3])\n"
-                        + "redis.call('expire', KEYS[3], 86400)\n"
-                        + "return 1\n");
-        CALIBRATE_LUA = calibrateScript;
-    }
 
     /**
      * 消费秒杀订单队列消息，异步落库创建订单并扣减数据库库存。
@@ -89,27 +57,7 @@ public class SeckillOrderConsumer {
         Long orderNo = ((Number) msg.get("orderNo")).longValue();
         String startTime = (String) msg.get("startTime");
 
-        // 终态检查：已补偿(FAILED)或已成功(CONSUMED)的交易禁止消费复活，直接幂等 ACK
-        // 用字符串比较而非 valueOf：Redis 中若残留已废弃的状态值，不应让消费抛异常中断
-        Object statusObj =
-                stringRedisTemplate.opsForHash().get("seckill:order:" + orderNo, "status");
-        if (statusObj != null) {
-            String statusName = statusObj.toString();
-            if (SeckillOrderStatus.FAILED.name().equals(statusName)
-                    || SeckillOrderStatus.CONSUMED.name().equals(statusName)) {
-                return;
-            }
-        }
-
-        // 幂等性检查
-        Long count =
-                orderMapper.selectCount(
-                        new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
-        if (count > 0) {
-            return;
-        }
-        failpointService.block(Failpoints.INSERT_BEFORE);
-
+        // 非锁定资料读取放在临界区之前，缩短热门商品库存行的持锁时间。
         SeckillGoods seckillGoods = seckillGoodsService.getById(seckillGoodsId);
         if (seckillGoods == null) {
             throw new RuntimeException("秒杀商品不存在");
@@ -117,6 +65,46 @@ public class SeckillOrderConsumer {
         Goods goods = goodsService.getById(seckillGoods.getGoodsId());
         if (goods == null) {
             throw new RuntimeException("关联商品不存在");
+        }
+
+        // 消费者与最终补偿统一锁顺序：seckill_goods -> order -> Redis 状态。
+        // 获得商品行锁后必须重新核对 DB 与 Redis，之前的任何快照都不能作为提交依据。
+        SeckillGoods lockedGoods = seckillGoodsMapper.selectByIdForUpdate(seckillGoodsId);
+        if (lockedGoods == null) {
+            throw new RuntimeException("秒杀商品不存在");
+        }
+        failpointService.block(Failpoints.CONSUME_LOCKED);
+
+        Order existingOrder = orderMapper.selectByOrderNoForUpdate(orderNo);
+        if (existingOrder != null) {
+            long transition = orderStateStore.markConsumed(orderNo);
+            if (transition == SeckillOrderStateStore.TERMINAL_CONFLICT) {
+                log.error("一致性异常：订单 {} 已落库但 Redis 为 FAILED，禁止覆盖", orderNo);
+            }
+            return;
+        }
+
+        String statusName = orderStateStore.getStatus(orderNo);
+        if (SeckillOrderStatus.FAILED.name().equals(statusName)) {
+            log.info("订单 {} 已终止补偿，消费者不再落库", orderNo);
+            return;
+        }
+        if (SeckillOrderStatus.CONSUMED.name().equals(statusName)) {
+            log.error("一致性异常：订单 {} 未落库但 Redis 为 CONSUMED", orderNo);
+            throw new AmqpRejectAndDontRequeueException("DB 无订单但 Redis 为 CONSUMED");
+        }
+        if (!SeckillOrderStatus.PENDING.name().equals(statusName)
+                && !SeckillOrderStatus.CONFIRMED.name().equals(statusName)) {
+            log.error("一致性异常：订单 {} 未落库且 Redis 状态不存在或非法：{}", orderNo, statusName);
+            throw new AmqpRejectAndDontRequeueException("订单 Redis 状态不存在或非法");
+        }
+
+        failpointService.block(Failpoints.INSERT_BEFORE);
+
+        if (lockedGoods.getSeckillStock() == null || lockedGoods.getSeckillStock() < 1) {
+            calibrateRedisStock(
+                    seckillGoodsId, startTime, userId, orderNo, lockedGoods.getSeckillStock());
+            throw new AmqpRejectAndDontRequeueException("库存不足，已校准 Redis");
         }
 
         Order order = new Order();
@@ -139,31 +127,24 @@ public class SeckillOrderConsumer {
                                 .setSql("seckill_stock = seckill_stock - 1"));
         if (!updated) {
             // 业务失败：DB 库存不足（Redis/DB 漂移），就地校准而非 incr，避免制造假库存
-            calibrateRedisStock(seckillGoodsId, startTime, userId, orderNo);
+            calibrateRedisStock(
+                    seckillGoodsId, startTime, userId, orderNo, lockedGoods.getSeckillStock());
             throw new AmqpRejectAndDontRequeueException("库存不足，已校准 Redis");
         }
 
-        // 事务提交成功后清除订单预占状态；超时残留由后续对账任务兜底
+        // SQL 提交后再确立 Redis 成功终态；严格 CAS 禁止覆盖 FAILED。
         TransactionSynchronizationManager.registerSynchronization(
                 new TransactionSynchronization() {
                     @Override
                     public void afterCommit() {
-                        stringRedisTemplate
-                                .opsForHash()
-                                .put(
-                                        "seckill:order:" + orderNo,
-                                        "status",
-                                        SeckillOrderStatus.CONSUMED.name());
-                        stringRedisTemplate
-                                .opsForHash()
-                                .put(
-                                        "seckill:order:" + orderNo,
-                                        "updatedAt",
-                                        String.valueOf(System.currentTimeMillis()));
-                        stringRedisTemplate.expire(
-                                "seckill:order:" + orderNo,
-                                SeckillOrderStatus.FINAL_TTL_SECONDS,
-                                TimeUnit.SECONDS);
+                        failpointService.block(Failpoints.COMMIT_BEFORE_STATUS);
+                        failpointService.throwIfEnabled(Failpoints.COMMIT_BEFORE_STATUS);
+                        long transition = orderStateStore.markConsumed(orderNo);
+                        if (transition == SeckillOrderStateStore.TERMINAL_CONFLICT) {
+                            log.error("一致性异常：订单 {} 已提交但 Redis 为 FAILED，禁止覆盖", orderNo);
+                        } else if (transition == SeckillOrderStateStore.INVALID_STATE) {
+                            log.warn("订单 {} 已提交但 Redis 状态不存在或非法", orderNo);
+                        }
                         failpointService.block(Failpoints.COMMIT_AFTER);
                     }
                 });
@@ -174,18 +155,16 @@ public class SeckillOrderConsumer {
      * 释放占位并标记失败，避免继续 incr 制造假库存。
      */
     private void calibrateRedisStock(
-            Long seckillGoodsId, String startTime, Long userId, Long orderNo) {
-        SeckillGoods latest = seckillGoodsService.getById(seckillGoodsId);
-        int dbStock = latest != null ? latest.getSeckillStock() : 0;
-        stringRedisTemplate.execute(
-                CALIBRATE_LUA,
-                Arrays.asList(
-                        "seckill:stock:" + seckillGoodsId + ":" + startTime,
-                        "seckill:ordered:" + seckillGoodsId + ":" + startTime,
-                        "seckill:order:" + orderNo),
-                userId.toString(),
-                String.valueOf(dbStock),
-                String.valueOf(System.currentTimeMillis()));
+            Long seckillGoodsId,
+            String startTime,
+            Long userId,
+            Long orderNo,
+            Integer databaseStock) {
+        int stock = databaseStock != null ? databaseStock : 0;
+        long result = orderStateStore.calibrate(userId, seckillGoodsId, startTime, orderNo, stock);
+        if (result == SeckillOrderStateStore.TERMINAL_CONFLICT) {
+            log.error("一致性异常：订单 {} 校准库存时 Redis 已是 CONSUMED", orderNo);
+        }
     }
 
     /**
@@ -202,15 +181,8 @@ public class SeckillOrderConsumer {
 
         String startTime = (String) msg.get("startTime");
 
-        log.warn("订单 {} 进入死信队列，执行补偿", orderNo);
-        stringRedisTemplate.execute(
-                COMPENSATE_LUA,
-                Arrays.asList(
-                        "seckill:stock:" + seckillGoodsId + ":" + startTime,
-                        "seckill:ordered:" + seckillGoodsId + ":" + startTime,
-                        "seckill:order:" + orderNo),
-                userId.toString(),
-                String.valueOf(System.currentTimeMillis()));
+        log.warn("订单 {} 进入死信队列，执行加锁补偿裁决", orderNo);
+        compensationService.compensateIfNoOrder(userId, seckillGoodsId, startTime, orderNo, "DLQ");
         failpointService.block(Failpoints.COMPENSATE_AFTER);
     }
 }

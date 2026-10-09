@@ -12,13 +12,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
-import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.format.DateTimeFormatter;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -56,24 +53,8 @@ public class SeckillReconciliationScanner {
     private final OrderMapper orderMapper;
     private final SeckillService seckillService;
     private final SeckillGoodsService seckillGoodsService;
-
-    private static final RedisScript<Long> COMPENSATE_LUA;
-
-    static {
-        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
-        script.setResultType(Long.class);
-        script.setScriptText(
-                "local status = redis.call('hget', KEYS[3], 'status')\n"
-                        + "if status == 'FAILED' or status == 'CONSUMED' then\n"
-                        + "  return 0\n"
-                        + "end\n"
-                        + "redis.call('incr', KEYS[1])\n"
-                        + "redis.call('srem', KEYS[2], ARGV[1])\n"
-                        + "redis.call('hset', KEYS[3], 'status', 'FAILED', 'updatedAt', ARGV[2])\n"
-                        + "redis.call('expire', KEYS[3], 86400)\n"
-                        + "return 1\n");
-        COMPENSATE_LUA = script;
-    }
+    private final SeckillOrderStateStore orderStateStore;
+    private final SeckillCompensationService compensationService;
 
     /**
      * 异常交易扫描：每隔 30s 扫描中间态预占记录，超时者按 DB 权威收敛。
@@ -127,11 +108,12 @@ public class SeckillReconciliationScanner {
                             new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
             if (count != null && count > 0) {
                 // 订单已成功落库，仅修正状态，禁止补偿
-                stringRedisTemplate
-                        .opsForHash()
-                        .put(orderKey, "status", SeckillOrderStatus.CONSUMED.name());
-                stringRedisTemplate.opsForHash().put(orderKey, "updatedAt", String.valueOf(now));
-                log.info("对账：订单 {} 已落库，状态 {} -> CONSUMED", orderNo, statusObj);
+                long transition = orderStateStore.markConsumed(orderNo);
+                if (transition == SeckillOrderStateStore.TERMINAL_CONFLICT) {
+                    log.error("一致性异常：订单 {} 已落库但 Redis 为 FAILED，禁止覆盖", orderNo);
+                } else {
+                    log.info("对账：订单 {} 已落库，状态 {} -> CONSUMED", orderNo, statusObj);
+                }
                 return;
             }
 
@@ -147,15 +129,14 @@ public class SeckillReconciliationScanner {
                 seckillService.resendSeckillOrder(userId, seckillGoodsId, startTime, orderNo);
                 log.info("对账：订单 {} 状态 {} 重投，retryCount={}", orderNo, statusObj, retryCount + 1);
             } else {
-                stringRedisTemplate.execute(
-                        COMPENSATE_LUA,
-                        Arrays.asList(
-                                "seckill:stock:" + seckillGoodsId + ":" + startTime,
-                                "seckill:ordered:" + seckillGoodsId + ":" + startTime,
-                                orderKey),
-                        userId.toString(),
-                        String.valueOf(now));
-                log.info("对账：订单 {} 重试耗尽，补偿 FAILED", orderNo);
+                SeckillCompensationService.Result result =
+                        compensationService.compensateIfNoOrder(
+                                userId,
+                                seckillGoodsId,
+                                startTime,
+                                orderNo,
+                                "RECONCILIATION_EXHAUSTED");
+                log.info("对账：订单 {} 重试耗尽，补偿裁决结果={}", orderNo, result);
             }
         } finally {
             stringRedisTemplate.delete(LOCK_KEY_PREFIX + orderNo);

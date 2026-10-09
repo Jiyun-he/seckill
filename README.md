@@ -22,7 +22,7 @@
 
 | 热路径设计 | 一致性保障 | 故障恢复 | 工程化验证 |
 | --- | --- | --- | --- |
-| 资格校验、一人一单与库存扣减在单次 Redis Lua 中原子完成 | Redis 预占、MQ 投递、MySQL 落库通过状态机与幂等策略协同 | 即时补偿、死信补偿、定时对账分别覆盖不同失败窗口 | 32 个 Testcontainers 用例 + 5 类 Failpoint + JMeter 压测与压后核验 |
+| 资格校验、一人一单与库存扣减在单次 Redis Lua 中原子完成 | Redis 预占、MQ 投递、MySQL 落库通过状态机与幂等策略协同 | 消费与最终补偿共享 MySQL 行锁协议，多个触发源统一裁决 | 37 个 Testcontainers 用例 + 8 类 Failpoint + JMeter 压测与压后核验 |
 
 与只展示「Redis 扣库存 + MQ 异步落库」的 Demo 不同，本项目主要回答一个更具体的问题：**在消息退回、confirm 回音丢失、消费者崩溃、重复消费与 Redis / DB 库存漂移时，订单如何最终回到可解释的终态。**
 
@@ -37,8 +37,10 @@ flowchart LR
     Q --> C[Order Consumer]
     C -->|transaction| DB[(MySQL)]
     Q -. retry exhausted .-> DLQ[Dead Letter Queue]
-    DLQ -->|idempotent compensation| R
-    S[Reconciliation Scanner] --> R
+    DLQ --> CC[Compensation Coordinator]
+    S[Reconciliation Scanner] --> CC
+    CC -->|shared row lock + DB fact check| DB
+    CC -->|strict Lua CAS| R
     S -->|DB as source of truth| DB
     S -. resend .-> EX
 ```
@@ -49,7 +51,7 @@ flowchart LR
 2. Lua 在一次执行中完成时间校验、一人一单查重、扣库存与预占状态写入。
 3. API 将订单事件投递到 RabbitMQ，立即返回雪花订单号，同步路径不访问 MySQL。
 4. 消费者在事务中写入订单并条件扣减 DB 库存，提交后将预占状态置为 `CONSUMED`。
-5. 不可判定的投递结果保留为中间态，对账任务以 MySQL 事实为准重投或补偿。
+5. 不可判定的投递结果保留为中间态；DLQ、对账耗尽和明确投递失败均经共享行锁重新核对 MySQL，再决定是否补偿。
 
 ### 核心不变式
 
@@ -58,8 +60,8 @@ flowchart LR
 | 不超卖 | Lua 原子扣减 + MySQL `stock >= 1` 条件更新双重防线 |
 | 一人一单 | Lua 原子查重 + Redis Set + DB 唯一索引 `uk_user_seckill` |
 | 不重复落库 | `order_no` 幂等检查 + 数据库唯一约束 |
-| 不误补偿 | 只对「能证明消息未入队」的结果立即补偿；未知结果交给对账 |
-| 终态不回退 | `FAILED` / `CONSUMED` 为权威终态，晚到 confirm 回调不得覆盖 |
+| 不误补偿 | 消费者与最终补偿统一锁定 `seckill_goods` 行；持锁后二次核对订单与 Redis 状态 |
+| 终态不回退 | 严格 Lua CAS 只允许中间态进入终态，`FAILED` / `CONSUMED` 不可互相覆盖 |
 
 > 详细的失败窗口、状态机与取舍见 [一致性设计](doc/consistency.md)。
 
@@ -122,8 +124,8 @@ curl http://localhost:8080/seckill/order/<orderNo> \
 
 | 类别 | 覆盖内容 | 入口 |
 | --- | --- | --- |
-| 自动化回归 | 32 个用例，覆盖 Lua 原子性、HTTP 语义、MQ 回调、消费落库、对账与库存预热 | `./mvnw test` |
-| 故障注入 | 在发送前、插入前、事务提交后、补偿后等精确窗口阻塞或抛错 | `fault-test` profile |
+| 自动化回归 | 37 个用例，覆盖 Lua 原子性、HTTP 语义、MQ 回调、消费落库、补偿竞态、对账与库存预热 | `./mvnw test` |
+| 故障注入 | 在发送、共享锁、插入、事务提交与状态写回等精确窗口阻塞或抛错 | `fault-test` profile |
 | 一致性压测 | 少库存竞争、单用户重复请求、混合重复流量，压后核验 DB / Redis / MQ | `test/run_consistency.py` |
 | 容量实验 | 性能阶梯与消费并发度对照 | `test/run_performance.py` |
 

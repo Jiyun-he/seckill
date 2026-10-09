@@ -6,20 +6,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.example.seckill.common.BusinessException;
 import com.example.seckill.common.SeckillOrderStatus;
 import com.example.seckill.service.SeckillOrderConsumer;
+import com.example.seckill.service.SeckillOrderStateStore;
 import com.example.seckill.service.SeckillService;
-import com.example.seckill.service.impl.SeckillServiceImpl;
 
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
-import java.lang.reflect.Field;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -47,6 +44,7 @@ class SeckillLuaTest extends AbstractIntegrationTest {
 
     @Autowired private SeckillService seckillService;
     @Autowired private SeckillOrderConsumer consumer;
+    @Autowired private SeckillOrderStateStore orderStateStore;
 
     @MockitoBean private RabbitTemplate rabbitTemplate;
 
@@ -156,56 +154,54 @@ class SeckillLuaTest extends AbstractIntegrationTest {
     // ---- 状态机终态保护（竞态修复回归） ----
 
     @Test
-    void 中间态PENDING正常升级为CONFIRMED() throws Exception {
+    void 中间态PENDING正常升级为CONFIRMED() {
         long orderNo = 778L;
         String orderKey = "seckill:order:" + orderNo;
         stringRedisTemplate.opsForHash().put(orderKey, "status", "PENDING");
 
-        Long result = executeUpdateStatusLua(orderKey, "CONFIRMED");
+        long result = orderStateStore.markConfirmed(orderNo);
 
         assertThat(result).isEqualTo(1L);
         assertThat(statusOf(orderNo)).isEqualTo("CONFIRMED");
     }
 
     @Test
-    void 终态CONSUMED不被晚到confirm覆盖() throws Exception {
+    void 终态CONSUMED不被晚到confirm覆盖() {
         long orderNo = 779L;
         String orderKey = "seckill:order:" + orderNo;
         stringRedisTemplate.opsForHash().put(orderKey, "status", "CONSUMED");
 
-        Long result = executeUpdateStatusLua(orderKey, "CONFIRMED");
+        long result = orderStateStore.markConfirmed(orderNo);
 
-        // 终态具有更高权威：返回 0，状态不被覆盖
-        assertThat(result).isEqualTo(0L);
+        // 冲突终态不可覆盖
+        assertThat(result).isEqualTo(SeckillOrderStateStore.TERMINAL_CONFLICT);
         assertThat(statusOf(orderNo)).isEqualTo("CONSUMED");
     }
 
     @Test
-    void 终态FAILED不被晚到ack覆盖() throws Exception {
+    void 终态FAILED不被晚到ack覆盖() {
         long orderNo = 780L;
         String orderKey = "seckill:order:" + orderNo;
         stringRedisTemplate.opsForHash().put(orderKey, "status", "FAILED");
 
-        Long result = executeUpdateStatusLua(orderKey, "CONFIRMED");
+        long result = orderStateStore.markConfirmed(orderNo);
 
-        assertThat(result).isEqualTo(0L);
+        assertThat(result).isEqualTo(SeckillOrderStateStore.TERMINAL_CONFLICT);
+        assertThat(statusOf(orderNo)).isEqualTo("FAILED");
+    }
+
+    @Test
+    void 终态FAILED不被落库回调覆盖() {
+        long orderNo = 781L;
+        seedOrder(orderNo, SeckillOrderStatus.FAILED);
+
+        long result = orderStateStore.markConsumed(orderNo);
+
+        assertThat(result).isEqualTo(SeckillOrderStateStore.TERMINAL_CONFLICT);
         assertThat(statusOf(orderNo)).isEqualTo("FAILED");
     }
 
     // ---- 辅助 ----
-
-    @SuppressWarnings("unchecked")
-    private Long executeUpdateStatusLua(String orderKey, String newStatus) throws Exception {
-        Field field = SeckillServiceImpl.class.getDeclaredField("UPDATE_STATUS_LUA");
-        field.setAccessible(true);
-        RedisScript<Long> script = (RedisScript<Long>) field.get(null);
-        return stringRedisTemplate.execute(
-                script,
-                Collections.singletonList(orderKey),
-                newStatus,
-                String.valueOf(System.currentTimeMillis()),
-                "3600");
-    }
 
     private void setActivity(String version, long startMillis, long endMillis) {
         stringRedisTemplate

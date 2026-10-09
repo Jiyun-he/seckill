@@ -113,29 +113,43 @@ TTL 分两档：中间态 3600 秒（超时交给对账），终态 86400 秒（
 
 | 分支 | 触发条件 | 处理 |
 | --- | --- | --- |
-| 消息无法路由 | `getReturned() != null` | 确定未入队 → 立即补偿 Redis |
+| 消息无法路由 | `getReturned() != null` | 确定未入队 → 提交加锁补偿裁决 |
 | confirm ack | `ex == null && confirm.isAck()` | 投递成功 → 状态置 `CONFIRMED` |
 | 其余（nack / future 异常完成） | `else` | 结果未知 → 不做断言，状态保持 `PENDING` 交对账 |
 
 判据只有一条：**能否证明消息没有发出去**。
 
-- **能证明**：`convertAndSend` 同步抛异常（消息根本没发出）、消息被退回（`getReturned() != null`，broker 收到但无处可投，未入队）。这两种情况下消息不可能被消费，立即补偿是安全的。
+- **能证明**：`convertAndSend` 同步抛异常（消息根本没发出）、消息被退回（`getReturned() != null`，broker 收到但无处可投，未入队）。这两种情况可以立即触发裁决，但仍统一经过商品行锁与数据库事实核对，不绕过并发协议直接执行 Lua。
 - **不能证明**：confirm nack 与 future 异常完成。二者都只说明「没拿到可靠回音」——Spring AMQP 在连接断开时会为所有未确认消息补发 nack（`PublisherCallbackChannelImpl#generateNacksForPendingAcks`），此时消息可能**早已入队甚至已被消费**；而 `CorrelationData#getFuture()` 在框架内只有正常完成路径（`complete(Confirm)`），不存在异常完成。贸然补偿会造成「库存还回去了但订单也落库了」的双花，因此一律不做断言，交由对账按数据库事实裁决。
 
 代价是 broker 真 nack（队列满、内部错误）时反馈变慢：由「立即 `FAILED`」变为「120 秒超时 + 3 次重投后 `FAILED`」，约 8 分钟。相对于误判导致用户看到 24 小时的错误状态，这个取舍是有意的。
 
 ## 补偿与校准
 
-补偿与校准都做幂等保护：`COMPENSATE_LUA` 开头检查 `status`，若已是 `FAILED` 或 `CONSUMED` 直接返回 0，不重复执行。
+补偿与校准都做严格幂等保护：Lua 只允许 `PENDING` / `CONFIRMED` 进入 `FAILED`；已是 `FAILED` 返回幂等成功，遇到 `CONSUMED` 返回终态冲突，状态缺失或非法则拒绝修改。库存恢复、释放用户占位和写入 `FAILED` 在同一个 Lua 脚本中完成。
 
 两类失败的处理方式**不同**：
 
 | 失败类型 | 触发场景 | 处理方式 |
 | --- | --- | --- |
-| 系统失败 | MQ 投递失败、confirm nack、无法路由、重试耗尽进入死信 | Redis 库存 `+1`、`SREM` 移除占位、状态置 `FAILED` |
+| 系统失败 | 明确投递失败、无法路由、DLQ、对账重试耗尽 | 经加锁裁决确认 DB 无订单后，Redis 库存 `+1`、`SREM` 移除占位、状态置 `FAILED` |
 | 业务失败 | DB 库存已耗尽，说明 Redis 与 DB 已漂移 | **不 `+1`**，将 Redis 库存校准为 DB 真实值，状态置 `FAILED` |
 
 业务失败之所以不能简单 `+1`，是因为此时的偏差来自 Redis 与 DB 的库存不一致，`+1` 只会让 Redis 继续偏离真相、制造出根本不存在的库存。消费者在 DB 条件扣减失败时调用 `calibrateRedisStock()`，直接以 DB 当前值覆盖 Redis，并抛出 `AmqpRejectAndDontRequeueException` 让事务回滚、消息转入死信路径。
+
+### 消费与最终补偿的并发协议
+
+所有可能把订单终止为 `FAILED` 的入口（明确投递失败、DLQ、Scanner 重试耗尽）都调用 `SeckillCompensationService`。它与消费者遵守相同顺序：
+
+```text
+锁定 seckill_goods(id) → 按 order_no 当前读订单 → 读取 Redis 状态 → 落库或终止裁决
+```
+
+- 消费者持锁后若 DB 已有订单则幂等结束；若 DB 无订单，只允许 `PENDING` / `CONFIRMED` 继续落库，`FAILED` 必须终止，`CONSUMED` 或状态缺失视为一致性异常。
+- 补偿方持锁后重新查库：DB 有订单时禁止归还库存并尝试将中间态收敛为 `CONSUMED`；DB 无订单且状态仍为中间态时才执行补偿 Lua。
+- `DB 有订单 + Redis FAILED` 与 `DB 无订单 + Redis CONSUMED` 都是需要告警/人工对账的冲突，普通流程不会用另一终态覆盖它。
+
+商品行锁覆盖消费者 SQL 事务直至提交，因此补偿不可能在“查无订单”之后越过一个已在途的同商品消费事务；反过来，补偿先完成并提交 `FAILED` 后，晚到消费者会在持锁二次检查时拒绝落库。代价是同一秒杀商品的数据库消费被串行化，吞吐影响必须用相同压测口径验证。`order_no` 是主键，锁定查询走唯一索引；所有路径固定使用商品行再订单行的顺序，降低交叉等待风险。
 
 ## 异常交易对账
 
@@ -152,10 +166,10 @@ TTL 分两档：中间态 3600 秒（超时交给对账），终态 86400 秒（
   │
   └─ DB 无订单
        ├─ retryCount < 3 → retryCount+1，重投消息
-       └─ retryCount = 3 → COMPENSATE_LUA 幂等补偿 → FAILED
+       └─ retryCount = 3 → 加锁补偿裁决 → Lua 幂等补偿 → FAILED
 ```
 
-先查库再决定是否补偿，是为了堵住这个窗口：消费者可能已经提交了事务，但在把状态写回 `CONSUMED` 之前崩溃。此时状态停留在中间态，而订单其实已经落库 —— 若不查库就补偿，会把一个成功订单的库存错误地还回去。
+Scanner 的第一次查库只用于快速分流，不能单独证明可以补偿。最终终止前仍必须进入共享商品行锁，并在锁内再次查询订单；这是为了同时覆盖“事务已提交但状态未写回”和“第一次查询时消费事务尚未提交”两个窗口。
 
 多实例部署时通过 `seckill:reconcile:lock:{orderNo}`（`SETNX`，TTL 30 秒）保证同一订单不会被两个实例同时处理。
 
@@ -175,21 +189,19 @@ TTL 分两档：中间态 3600 秒（超时交给对账），终态 86400 秒（
 
 状态机的一个隐蔽缺陷是**晚到的 MQ 回调可能覆盖终态**：如果消费落库（`CONSUMED`）先完成，而 confirm ack 回调后到，无条件 `HSET status` 会把终态回退成 `CONFIRMED`，导致状态查询短暂显示错误。
 
-修复方式是让所有中间态转移走同一个原子 CAS 脚本 `UPDATE_STATUS_LUA`，与补偿脚本的终态检查对齐：
+修复方式是由 `SeckillOrderStateStore` 为每种转换提供严格 Lua CAS：
 
-```lua
-local status = redis.call('hget', KEYS[1], 'status')
-if status == 'FAILED' or status == 'CONSUMED' then
-  return 0
-end
-redis.call('hset', KEYS[1], 'status', ARGV[1], 'updatedAt', ARGV[2])
-redis.call('expire', KEYS[1], ARGV[3])
-return 1
+```text
+PENDING ──confirm──> CONFIRMED
+PENDING / CONFIRMED ──SQL committed──> CONSUMED
+PENDING / CONFIRMED ──compensate──> FAILED
+
+FAILED 与 CONSUMED 不允许互相覆盖；重复写入相同终态幂等返回。
 ```
 
-即 **`FAILED` / `CONSUMED` 具有更高权威，不可被覆盖**。消费者侧同样有对称的检查：`handleSeckillOrder()` 开头若发现状态已是终态，直接幂等返回（ACK），不复活已补偿或已成功的交易。
+消费者的 `afterCommit` 也走 `markConsumed()` CAS，不能再无条件覆盖 `FAILED`。消费者在持有商品行锁后同时核对 DB 与 Redis：只有 DB 已存在订单时才能把中间态收敛为 `CONSUMED`；DB 不存在却看到 `CONSUMED` 时会报告一致性异常，而不是把它当作正常幂等成功。
 
-需要说明的是，消费者 `afterCommit` 写 `CONSUMED` 时**不走 CAS**，是无条件写入，这不是遗漏：该写发生在事务提交之后，以「订单已落库」这一既成事实为依据，是信息最全的写；而 CAS 要防的是信息更少的晚到回调。终态权威约束的是**后来者**，不是事实的确立者。
+这套协议仍有明确边界：它依赖订单 Redis 记录的终态 TTL（当前 24 小时）阻止任意晚到消息。超过 TTL 后状态缺失，消费者会拒绝落库并告警，但系统不声称能仅凭 Redis 自动修复任意时间后的跨系统异常。
 
 ## 缓存防护
 

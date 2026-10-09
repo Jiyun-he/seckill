@@ -12,6 +12,8 @@ import com.example.seckill.fault.FailpointService;
 import com.example.seckill.fault.Failpoints;
 import com.example.seckill.mapper.OrderMapper;
 import com.example.seckill.mapper.SeckillGoodsMapper;
+import com.example.seckill.service.SeckillCompensationService;
+import com.example.seckill.service.SeckillOrderStateStore;
 import com.example.seckill.service.SeckillService;
 import com.example.seckill.util.SnowflakeIdUtil;
 import com.example.seckill.vo.SeckillGoodsVO;
@@ -58,6 +60,8 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
     private final SnowflakeIdUtil snowflakeIdUtil;
     private final FailpointService failpointService;
     private final OrderMapper orderMapper;
+    private final SeckillOrderStateStore orderStateStore;
+    private final SeckillCompensationService compensationService;
 
     private static final String SECKILL_STOCK_KEY = "seckill:stock:";
     private static final String SECKILL_GOODS_CACHE_KEY = "seckill:goods:";
@@ -89,10 +93,6 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
     private static final long RETURN_STOCK_EMPTY = -1L;
 
     private static final RedisScript<Long> SECKILL_LUA;
-    private static final RedisScript<Long> COMPENSATE_LUA;
-
-    /** 中间态状态转移（原子 CAS）：终态 FAILED/CONSUMED 具有更高权威，晚到的 MQ 回调不得覆盖 */
-    private static final RedisScript<Long> UPDATE_STATUS_LUA;
 
     static {
         DefaultRedisScript<Long> seckillScript = new DefaultRedisScript<>();
@@ -127,32 +127,6 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
                         + "redis.call('expire', KEYS[3], 3600)\n"
                         + "return after\n");
         SECKILL_LUA = seckillScript;
-
-        DefaultRedisScript<Long> compensateScript = new DefaultRedisScript<>();
-        compensateScript.setResultType(Long.class);
-        compensateScript.setScriptText(
-                "local status = redis.call('hget', KEYS[3], 'status')\n"
-                        + "if status == 'FAILED' or status == 'CONSUMED' then\n"
-                        + "  return 0\n"
-                        + "end\n"
-                        + "redis.call('incr', KEYS[1])\n"
-                        + "redis.call('srem', KEYS[2], ARGV[1])\n"
-                        + "redis.call('hset', KEYS[3], 'status', 'FAILED', 'updatedAt', ARGV[2])\n"
-                        + "redis.call('expire', KEYS[3], 86400)\n"
-                        + "return 1\n");
-        COMPENSATE_LUA = compensateScript;
-
-        DefaultRedisScript<Long> updateStatusScript = new DefaultRedisScript<>();
-        updateStatusScript.setResultType(Long.class);
-        updateStatusScript.setScriptText(
-                "local status = redis.call('hget', KEYS[1], 'status')\n"
-                        + "if status == 'FAILED' or status == 'CONSUMED' then\n"
-                        + "  return 0\n"
-                        + "end\n"
-                        + "redis.call('hset', KEYS[1], 'status', ARGV[1], 'updatedAt', ARGV[2])\n"
-                        + "redis.call('expire', KEYS[1], ARGV[3])\n"
-                        + "return 1\n");
-        UPDATE_STATUS_LUA = updateStatusScript;
     }
 
     /**
@@ -324,11 +298,6 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
         // startTime 作为活动版本标识，供死信消费者还原带版本的库存 key
         msg.put("startTime", startTimeStr);
 
-        String stockKey = SECKILL_STOCK_KEY + seckillGoodsId + ":" + startTimeStr;
-        String orderedKey = SECKILL_ORDERED_SET_KEY + seckillGoodsId + ":" + startTimeStr;
-        String orderKey = SECKILL_ORDER_PREOCCUPY_KEY + orderNo;
-        String userIdStr = userId.toString();
-
         CorrelationData correlationData = new CorrelationData(orderNo.toString());
 
         // confirm 回调只更新状态：仅「消息确定未发出」才立即补偿；结果未知一律保持 PENDING 交对账
@@ -338,14 +307,20 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
                         (confirm, ex) -> {
                             if (correlationData.getReturned() != null) {
                                 // 消息无法路由被退回：确定未入队、不可能被消费，可安全补偿
-                                compensateRedis(stockKey, orderedKey, orderKey, userIdStr);
+                                compensationService.compensateIfNoOrder(
+                                        userId,
+                                        seckillGoodsId,
+                                        startTimeStr,
+                                        orderNo,
+                                        "PUBLISH_RETURNED");
                                 log.warn("订单 {} 消息无法路由，已补偿 Redis", orderNo);
                             } else if (ex == null && confirm.isAck()) {
                                 // 投递成功，等待消费落库
-                                updateOrderStatus(
-                                        orderKey,
-                                        SeckillOrderStatus.CONFIRMED,
-                                        SeckillOrderStatus.INTERMEDIATE_TTL_SECONDS);
+                                long transition = orderStateStore.markConfirmed(orderNo);
+                                if (transition < SeckillOrderStateStore.IDEMPOTENT) {
+                                    log.warn(
+                                            "订单 {} confirm 状态转换被拒绝，result={}", orderNo, transition);
+                                }
                             } else {
                                 // nack 或 future 异常完成：都只说明「没拿到可靠回音」，broker 可能已入队、
                                 // 消息仍会被消费，故不做任何断言，保持 PENDING 交对账以 DB 事实裁决
@@ -361,31 +336,13 @@ public class SeckillServiceImpl extends ServiceImpl<SeckillGoodsMapper, SeckillG
                     correlationData);
         } catch (Exception e) {
             // 同步异常：消息未发出（连接断等），明确失败，补偿
-            compensateRedis(stockKey, orderedKey, orderKey, userIdStr);
+            compensationService.compensateIfNoOrder(
+                    userId, seckillGoodsId, startTimeStr, orderNo, "PUBLISH_SYNC_FAILURE");
             throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR, "消息发送失败", e);
         }
         // 消息已发出，此后的 fault 埋点（BLOCK/THROW）模拟 crash/异常，结果未知，交由 confirm 回调 + 对账框架收敛
         failpointService.block(Failpoints.PUBLISH_AFTER);
         failpointService.throwIfEnabled(Failpoints.PUBLISH_AFTER);
-    }
-
-    private void compensateRedis(
-            String stockKey, String orderedKey, String orderKey, String userIdStr) {
-        stringRedisTemplate.execute(
-                COMPENSATE_LUA,
-                Arrays.asList(stockKey, orderedKey, orderKey),
-                userIdStr,
-                String.valueOf(System.currentTimeMillis()));
-    }
-
-    private void updateOrderStatus(String orderKey, SeckillOrderStatus status, long ttlSeconds) {
-        // 原子 CAS：终态（FAILED/CONSUMED）具有更高权威，晚到的 MQ 回调（ack/超时）不得覆盖
-        stringRedisTemplate.execute(
-                UPDATE_STATUS_LUA,
-                Arrays.asList(orderKey),
-                status.name(),
-                String.valueOf(System.currentTimeMillis()),
-                String.valueOf(ttlSeconds));
     }
 
     @Override

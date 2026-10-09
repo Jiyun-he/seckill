@@ -50,6 +50,7 @@ class SeckillOrderConsumerTest extends AbstractIntegrationTest {
     @Test
     void consume_正常消费落库并扣减库存() {
         long orderNo = 90001L;
+        seedOrder(orderNo, "PENDING");
 
         consumer.handleSeckillOrder(msg(orderNo));
 
@@ -61,6 +62,7 @@ class SeckillOrderConsumerTest extends AbstractIntegrationTest {
     @Test
     void consume_同一orderNo重复消费只落库一次() {
         long orderNo = 90002L;
+        seedOrder(orderNo, "PENDING");
 
         consumer.handleSeckillOrder(msg(orderNo));
         consumer.handleSeckillOrder(msg(orderNo));
@@ -73,6 +75,7 @@ class SeckillOrderConsumerTest extends AbstractIntegrationTest {
     void consume_并发重复消费仍只有一条订单() throws Exception {
         long orderNo = 90003L;
         Map<String, Object> message = msg(orderNo);
+        seedOrder(orderNo, "PENDING");
         int threads = 2;
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         CountDownLatch ready = new CountDownLatch(threads);
@@ -112,6 +115,7 @@ class SeckillOrderConsumerTest extends AbstractIntegrationTest {
         long secondOrderNo = 90006L;
 
         // 第一单正常落库（user 2001 + seckillGoods 1）
+        seedOrder(firstOrderNo, "PENDING");
         consumer.handleSeckillOrder(msg(firstOrderNo));
         assertThat(countOrders(firstOrderNo)).isEqualTo(1L);
         assertThat(dbStock()).isEqualTo(49);

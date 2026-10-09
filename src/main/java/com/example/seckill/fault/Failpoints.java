@@ -19,11 +19,20 @@ public final class Failpoints {
     /** 消费者事务提交（afterCommit）之后、ACK 之前 */
     public static final String COMMIT_AFTER = "commit_after";
 
+    /** 消费者事务已经提交、写入 Redis CONSUMED 之前 */
+    public static final String COMMIT_BEFORE_STATUS = "commit_before_status";
+
     /** 死信补偿（compensateRedis）之后、ACK 之前 */
     public static final String COMPENSATE_AFTER = "compensate_after";
 
     /** 消费者幂等检查（selectCount）之后、INSERT 订单之前，用于放大 check-then-act 窗口 */
     public static final String INSERT_BEFORE = "insert_before";
+
+    /** 消费者已获得商品库存行锁、执行订单写入之前 */
+    public static final String CONSUME_LOCKED = "consume_locked";
+
+    /** 最终补偿已获得商品库存行锁、核对订单之前 */
+    public static final String COMPENSATE_LOCKED = "compensate_locked";
 
     private Failpoints() {}
 }

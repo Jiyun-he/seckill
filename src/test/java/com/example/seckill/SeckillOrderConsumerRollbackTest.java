@@ -61,6 +61,15 @@ class SeckillOrderConsumerRollbackTest extends AbstractIntegrationTest {
                 .when(seckillGoodsService)
                 .update(ArgumentMatchers.<Wrapper<SeckillGoods>>any());
 
+        Map<String, String> fields = new HashMap<>();
+        fields.put("status", "PENDING");
+        fields.put("userId", String.valueOf(USER_ID));
+        fields.put("seckillGoodsId", String.valueOf(GOODS_ID));
+        fields.put("startTime", VERSION);
+        fields.put("retryCount", "0");
+        fields.put("updatedAt", String.valueOf(System.currentTimeMillis()));
+        stringRedisTemplate.opsForHash().putAll("seckill:order:" + orderNo, fields);
+
         assertThatThrownBy(() -> consumer.handleSeckillOrder(msg(orderNo)))
                 .isInstanceOf(RuntimeException.class);
 
